@@ -5,8 +5,16 @@ import type { MediaFailure } from './errors';
  * Lifecycle of an asset once it has passed validation. `idle` and
  * `validating` describe the ingestion session (see ingestion.ts), not an asset:
  * there is no asset before validation succeeds.
+ *
+ *   accepted  – passed client-side validation (browser only)
+ *   uploaded  – the server has received and stored the file
+ *   processing – the server is inspecting it (FFprobe/FFmpeg)
+ *   ready     – media is stored and understood
+ *   failed    – could not be stored or understood
+ *
+ * This is MEDIA status. Analysis status is separate (domain/analysis/job.ts).
  */
-export type MediaAssetStatus = 'accepted' | 'processing' | 'ready' | 'failed';
+export type MediaAssetStatus = 'accepted' | 'uploaded' | 'processing' | 'ready' | 'failed';
 
 export type MetadataSource = 'browser' | 'ffprobe';
 

@@ -7,7 +7,8 @@ import { Progress } from '@/components/ui/Progress';
 import { CheckIcon, UploadIcon } from '@/components/ui/icons';
 import type { MediaAsset } from '@/domain/media/asset';
 import { formatBytes, formatDuration } from '@/domain/media/format';
-import { isBusy } from '@/domain/media/ingestion';
+import { isBusy, type ProcessingPhase } from '@/domain/media/ingestion';
+import type { AnalysisStatus } from '@/domain/analysis/job';
 import { ACCEPTED_VIDEO_EXTENSIONS } from '@/domain/media/validation';
 import { config } from '@/infrastructure/config/env';
 import { defaultMediaIngestion } from '@/infrastructure/mediaIngestionFactory';
@@ -109,46 +110,90 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
         </>
       )}
 
-      {asset && <AssetSummary asset={asset} headingId={headingId} hintId={hintId} status={state.status as 'accepted' | 'processing' | 'ready'} onReplace={openPicker} />}
+      {asset && (
+        <AssetSummary
+          asset={asset}
+          headingId={headingId}
+          hintId={hintId}
+          status={state.status as 'accepted' | 'processing' | 'ready'}
+          phase={state.status === 'processing' ? state.phase : null}
+          uploadFraction={state.status === 'processing' ? state.uploadFraction : null}
+          analysis={state.status === 'ready' ? state.analysis : null}
+          mode={ingestion.mode}
+          onReplace={openPicker}
+        />
+      )}
 
       <p className="sw-sr-only" role="status" aria-live="polite">
         {state.status === 'validating' && 'Checking your file'}
-        {state.status === 'processing' && 'Preparing your media'}
-        {state.status === 'ready' && `Ready for analysis: ${state.asset.filename}`}
+        {state.status === 'processing' && (state.phase === 'uploading' ? 'Uploading your video' : 'Preparing your media')}
+        {state.status === 'ready' && `Media ready: ${state.asset.filename}. Analysis has not started.`}
         {state.status === 'failed' && errorCopy(state.failure.code, maxBytes).title}
       </p>
     </div>
   );
 }
 
-function AssetSummary({ asset, headingId, hintId, status, onReplace }: {
+const ANALYSIS_LABEL: Record<AnalysisStatus, string> = {
+  not_started: 'Not started',
+  queued: 'Queued',
+  processing: 'In progress',
+  completed: 'Completed',
+  failed: 'Failed',
+};
+
+interface AssetSummaryProps {
   asset: MediaAsset;
   headingId: string;
   hintId: string;
   status: 'accepted' | 'processing' | 'ready';
+  phase: ProcessingPhase | null;
+  uploadFraction: number | null;
+  analysis: AnalysisStatus | null;
+  mode: 'local' | 'server';
   onReplace: () => void;
-}) {
+}
+
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, mode, onReplace }: AssetSummaryProps) {
   const m = asset.metadata;
   const ready = status === 'ready';
+  const uploading = status === 'processing' && phase === 'uploading';
+  const percent = Math.round((uploadFraction ?? 0) * 100);
   return (
     <>
       {ready && <span className="sw-upload__icon sw-upload__icon--success"><CheckIcon size={28} /></span>}
       <h3 id={headingId} className="sw-h3">
         {status === 'accepted' && 'Video accepted'}
-        {status === 'processing' && 'Preparing your media...'}
-        {ready && 'Ready for analysis'}
+        {uploading && 'Uploading your video'}
+        {status === 'processing' && !uploading && 'Preparing your media...'}
+        {ready && 'Media ready'}
       </h3>
       <p id={hintId} className="sw-body-sm sw-upload__filename">{asset.filename}</p>
 
-      {status === 'processing' && <div className="sw-upload__progress"><Progress label="Preparing your media" /></div>}
+      {status === 'processing' && (
+        <div className="sw-upload__progress">
+          {uploading ? <Progress label="Uploading video" value={percent} /> : <Progress label="Preparing your media" />}
+          {uploading && <p className="sw-caption sw-muted sw-upload__percent">{percent}%</p>}
+        </div>
+      )}
 
       <dl className="sw-upload__facts">
-        <div><dt className="sw-caption">Type</dt><dd className="sw-body-sm">{asset.typeLabel}</dd></div>
-        <div><dt className="sw-caption">Size</dt><dd className="sw-body-sm">{formatBytes(asset.sizeBytes)}</dd></div>
-        {m.durationSeconds !== null && <div><dt className="sw-caption">Duration</dt><dd className="sw-body-sm">{formatDuration(m.durationSeconds)}</dd></div>}
-        {m.width !== null && m.height !== null && <div><dt className="sw-caption">Resolution</dt><dd className="sw-body-sm">{m.width}×{m.height}</dd></div>}
+        <Fact label="Type" value={asset.typeLabel} />
+        <Fact label="Size" value={formatBytes(asset.sizeBytes)} />
+        {m.durationSeconds !== null && <Fact label="Duration" value={formatDuration(m.durationSeconds)} />}
+        {m.width !== null && m.height !== null && <Fact label="Resolution" value={`${m.width}×${m.height}`} />}
+        {m.frameRate !== null && <Fact label="Frame rate" value={`${Number(m.frameRate.toFixed(2))} fps`} />}
+        {m.videoCodec !== null && <Fact label="Video" value={m.videoCodec.toUpperCase()} />}
+        {m.hasAudio !== null && <Fact label="Audio" value={m.hasAudio ? (m.audioCodec ?? 'Yes').toUpperCase() : 'None'} />}
+        {m.hasSubtitles !== null && <Fact label="Subtitles" value={m.hasSubtitles ? 'Embedded' : 'None'} />}
       </dl>
 
+      {ready && (
+        <div className="sw-upload__status" aria-label="Status">
+          <Badge tone="success">Media: ready</Badge>
+          <Badge tone="neutral">Analysis: {ANALYSIS_LABEL[analysis ?? 'not_started'].toLowerCase()}</Badge>
+        </div>
+      )}
       {ready && m.availability === 'unavailable' && (
         <div className="sw-upload__alert">
           <Alert tone="info" title="Video details are not available in this browser">
@@ -158,10 +203,18 @@ function AssetSummary({ asset, headingId, hintId, status, onReplace }: {
       )}
       {ready && (
         <div className="sw-upload__alert">
-          <Alert tone="info" title="Analysis is not available yet">This file stays on your device. Safety analysis arrives in a later release.</Alert>
+          <Alert tone="info" title="Analysis has not started">
+            {mode === 'server'
+              ? 'Your video was uploaded to the SafeWatch server and is stored temporarily; it is deleted automatically. Safety analysis arrives in a later release.'
+              : 'This file stays on your device. Safety analysis arrives in a later release.'}
+          </Alert>
         </div>
       )}
       {ready && <Button variant="secondary" onClick={onReplace}>Choose a different video</Button>}
     </>
   );
+}
+
+function Fact({ label, value }: { label: string; value: string }) {
+  return <div><dt className="sw-caption">{label}</dt><dd className="sw-body-sm">{value}</dd></div>;
 }

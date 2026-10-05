@@ -1,7 +1,9 @@
 import { PENDING_METADATA } from '@/domain/media/asset';
 import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
+import { MediaIngestionError } from '@/domain/media/errors';
 import { createMediaIngestion } from './mediaIngestion';
+import type { MediaUploader } from './mediaUploader';
 import type { MediaProcessor } from './mediaProcessor';
 
 const MB = 1024 * 1024;
@@ -59,14 +61,15 @@ describe('createMediaIngestion.prepare', () => {
     const ingestion = make();
     const file = makeFile('a.mp4', HEADERS.mp4);
     const prepared = await ingestion.prepare(file, await ingestion.accept(file));
-    expect(prepared.metadata).toMatchObject({ availability: 'available', durationSeconds: 60, width: 1280 });
+    expect(prepared.asset.metadata).toMatchObject({ availability: 'available', durationSeconds: 60, width: 1280 });
+    expect(prepared.analysis).toBe('not_started');
   });
   it('treats unavailable metadata as success, not failure', async () => {
     const processor: MediaProcessor = { extractMetadata: async () => normalizeMetadata({}, 'browser', 'unsupported-by-browser') };
     const ingestion = make(processor);
     const file = makeFile('a.mkv', HEADERS.matroska, '');
     const prepared = await ingestion.prepare(file, await ingestion.accept(file));
-    expect(prepared.metadata).toMatchObject({ availability: 'unavailable', unavailableReason: 'unsupported-by-browser' });
+    expect(prepared.asset.metadata).toMatchObject({ availability: 'unavailable', unavailableReason: 'unsupported-by-browser' });
   });
   it('maps unexpected processor errors to a typed failure without leaking details', async () => {
     const processor: MediaProcessor = { extractMetadata: async () => { throw new Error('ENOENT /secret/path'); } };
@@ -76,5 +79,48 @@ describe('createMediaIngestion.prepare', () => {
     const err = await ingestion.prepare(file, accepted).catch((e: Error) => e);
     expect(err).toMatchObject({ code: 'processing-failed' });
     expect((err as Error).message).not.toContain('secret');
+  });
+});
+
+describe('createMediaIngestion with a server uploader', () => {
+  const remoteAsset = (patch = {}) => ({
+    id: 'server-id', filename: 'a.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 5,
+    status: 'ready' as const, metadata: normalizeMetadata({ durationSeconds: 1, width: 2, height: 2 }, 'ffprobe'), createdAt: 'x', failure: null, ...patch,
+  });
+  const make = (uploader: MediaUploader) => createMediaIngestion({ uploader, maxBytes: 10 * MB });
+
+  it('reports server mode and still validates on the client first', async () => {
+    const uploader: MediaUploader = { upload: vi.fn(), remove: vi.fn() };
+    const ingestion = make(uploader);
+    expect(ingestion.mode).toBe('server');
+    await expect(ingestion.accept(makeFile('a.txt', HEADERS.mp4))).rejects.toMatchObject({ code: 'unsupported-type' });
+    expect(uploader.upload).not.toHaveBeenCalled();
+  });
+  it('uploads, forwards progress, and returns the server asset and analysis status', async () => {
+    const upload = vi.fn(async (_f: File, h?: { onProgress?: (n: number) => void }) => { h?.onProgress?.(0.5); return { asset: remoteAsset(), analysis: { status: 'not_started' as const } }; });
+    const ingestion = make({ upload, remove: vi.fn() });
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    const onProgress = vi.fn();
+    const prepared = await ingestion.prepare(file, await ingestion.accept(file), { onProgress });
+    expect(prepared).toMatchObject({ asset: { id: 'server-id', status: 'ready' }, analysis: 'not_started' });
+    expect(onProgress).toHaveBeenCalledWith(0.5);
+  });
+  it('turns a server-side failed asset into a typed error', async () => {
+    const failed = remoteAsset({ status: 'failed', failure: { code: 'invalid-media' } });
+    const ingestion = make({ upload: async () => ({ asset: failed, analysis: { status: 'not_started' } }), remove: vi.fn() });
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    await expect(ingestion.prepare(file, await ingestion.accept(file))).rejects.toMatchObject({ code: 'invalid-media' });
+  });
+  it('preserves typed upload errors and maps unknown ones', async () => {
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    const busy = make({ upload: async () => { throw new MediaIngestionError('server-busy'); }, remove: vi.fn() });
+    await expect(busy.prepare(file, await busy.accept(file))).rejects.toMatchObject({ code: 'server-busy' });
+    const weird = make({ upload: async () => { throw new TypeError('boom'); }, remove: vi.fn() });
+    await expect(weird.prepare(file, await weird.accept(file))).rejects.toMatchObject({ code: 'processing-failed' });
+  });
+  it('removes server data through the uploader', async () => {
+    const remove = vi.fn(async () => undefined);
+    await make({ upload: vi.fn(), remove }).remove(remoteAsset());
+    expect(remove).toHaveBeenCalledWith('server-id');
   });
 });

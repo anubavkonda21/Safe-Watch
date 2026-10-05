@@ -31,6 +31,25 @@ describe('ingestionReducer', () => {
     const s = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset: prepared }]);
     expect(s).toMatchObject({ status: 'ready', asset: { status: 'ready', metadata: { availability: 'available' } } });
   });
+  it('tracks real upload progress, never moves backwards, and switches to inspecting at 100%', () => {
+    const base = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process', phase: 'uploading' }]);
+    expect(base).toMatchObject({ phase: 'uploading', uploadFraction: 0 });
+    const half = run([{ type: 'progress', fraction: 0.5 }], base);
+    expect(half).toMatchObject({ phase: 'uploading', uploadFraction: 0.5 });
+    expect(run([{ type: 'progress', fraction: 0.2 }], half)).toMatchObject({ uploadFraction: 0.5 });
+    expect(run([{ type: 'progress', fraction: 7 }], half)).toMatchObject({ phase: 'inspecting', uploadFraction: 1 });
+    expect(run([{ type: 'progress', fraction: -3 }], base)).toMatchObject({ uploadFraction: 0 });
+  });
+  it('ignores progress outside the uploading phase', () => {
+    const inspecting = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }]);
+    expect(inspecting).toMatchObject({ phase: 'inspecting', uploadFraction: null });
+    expect(run([{ type: 'progress', fraction: 0.5 }], inspecting)).toBe(inspecting);
+    expect(run([{ type: 'progress', fraction: 0.5 }])).toBe(initialIngestionState);
+  });
+  it('ready carries analysis status separately: NOT started by default', () => {
+    const s = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }]);
+    expect(s).toMatchObject({ status: 'ready', analysis: 'not_started', asset: { status: 'ready' } });
+  });
   it('processing → failed; unknown errors become processing-failed', () => {
     const s = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'fail', error: new Error('boom: /internal/path') }]);
     expect(s).toEqual({ status: 'failed', failure: { code: 'processing-failed' } });

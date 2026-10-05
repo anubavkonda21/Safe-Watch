@@ -1,6 +1,6 @@
 # SafeWatch Media Architecture
 
-Status: decided in Checkpoint 1. Only the client-side contract is implemented; the server is introduced in Checkpoint 2 (see §5, §12).
+Status: decided in Checkpoint 1; the server foundation was implemented in Checkpoint 2 (see §14–§17). Audio/subtitle/frame extraction is still planned.
 
 ## 1. Problem
 
@@ -135,3 +135,69 @@ AI stages consume a `MediaAsset` plus derived artefacts (audio file, subtitle cu
 - **C. Dedicated service now:** operational cost with no current load to justify it; reachable later through ports.
 - **D. Managed cloud now:** privacy and recurring cost for an unproven product; adds vendor coupling before requirements are known.
 - **E. Desktop wrapper:** limits reach and multiplies distribution work; the product is web-first.
+
+---
+
+## 14. Checkpoint 2 implementation (what was actually built)
+
+**Repository layout (decision).** One repository, two entry points, one shared pure domain:
+
+```
+src/domain/            shared by browser and server (media model, validation, sniffing, API contract, analysis boundary)
+src/{application,infrastructure,features,...}   browser
+server/src/{api,application,domain,infrastructure}   Node API
+```
+
+The server imports `@/domain/*` directly; domain files have no Node or browser dependencies, so nothing is duplicated and no package split is needed yet. If a second consumer appears, `src/domain` can be extracted to a workspace package without changing imports' meaning.
+
+**Layering.** `api` (HTTP only) → `application` (`MediaService`, ports) → `domain` ← `infrastructure` (adapters). Neither the HTTP layer nor the application layer contains FFmpeg commands, filesystem paths or media parsing.
+
+**Upload protocol (decision).** The file is the raw request body (`POST /api/media`, filename in `X-SafeWatch-Filename`), not multipart. It removes a parsing dependency and a class of multipart bugs, streams naturally (`HTTP stream → signature check → .part file → rename`), and lets the browser's `XMLHttpRequest` report real upload progress. The server answers `202` once the bytes are stored; processing runs asynchronously through a bounded in-process queue and the client polls `GET /api/media/:id`.
+
+**Statuses (decision).** Media: `uploaded → processing → ready | failed` (plus client-only `accepted`). Analysis: `not_started | queued | processing | completed | failed`, carried separately in every response. No analysis exists yet, so it is always `not_started`.
+
+## 15. Media and storage lifecycle
+
+| Event | What happens |
+| --- | --- |
+| Upload starts | Cheap checks (extension, MIME, declared size, concurrency) run before any byte is read. Bytes stream to `<uuid>.part` (mode 0600) in a 0700 directory; the first 64 bytes are sniffed *while streaming* and a mismatch aborts the upload. |
+| Upload completes | `.part` is renamed to `<uuid>.media` (atomic: a crash cannot leave a half-written file that looks finished). Record `uploaded`. |
+| Processing | Queue slot → `processing` → FFprobe metadata, then FFmpeg decode smoke test (first 2 s), under a timeout. |
+| Success | `ready`; the original stays on disk (future stages need it) until deleted or expired. |
+| Failure | Record `failed` with a typed code; **the file is deleted immediately**. |
+| Timeout | The child process is killed (`SIGKILL`), record `failed: timeout`, file deleted. |
+| Upload error / client disconnect / over limit / deadline | `.part` removed, nothing registered. |
+| User replaces or leaves | Client calls `DELETE /api/media/:id` (best effort). |
+| Retention | Records expire after `SAFEWATCH_RETENTION_MINUTES` (default 60); a periodic sweep deletes expired media. |
+| Delete fails | Logged; retried by the next sweep, which also removes any owned file older than the retention window regardless of registry state. |
+| Server crash / restart | Records are in memory and are lost; the storage directory is **purged at startup**, and again at graceful shutdown. |
+
+Safety rails: ids are validated UUIDs before any path is built; the directory must be empty or carry a SafeWatch marker file; purge/sweep only touch names matching `<uuid>.(media|part)`.
+
+## 16. FFmpeg Runtime Strategy
+
+### Local development
+Install FFmpeg with the platform package manager (macOS: `brew install ffmpeg`, which installed FFmpeg/FFprobe 9.0.2 on this machine). The server resolves `ffmpeg`/`ffprobe` from `PATH` or `SAFEWATCH_FFMPEG_PATH`/`SAFEWATCH_FFPROBE_PATH`, and refuses to start with instructions if they are missing. No Docker is needed.
+
+### Production
+Options evaluated:
+
+| Option | Pros | Cons |
+| --- | --- | --- |
+| **System package** (apt/dnf on the host or VM) | Simplest; security patches via OS updates; no extra moving parts | Version varies by distro; host is shared with the API |
+| **Docker image** (FFmpeg in the API image) | Reproducible, pinned version, easy sandboxing (non-root, read-only FS, CPU/memory limits, no network) | Adds a container platform and image maintenance |
+| **Bundled static binary** (`ffmpeg-static`/vendored) | Zero system dependency | Supply-chain and licensing burden (GPL/LGPL, codecs), slow security updates, larger artefacts |
+| **Managed media service** | No FFmpeg ops | Media leaves our infrastructure (privacy), per-minute cost, vendor coupling |
+
+**Choice for the current stage: system package on the API host.** It needs no new platform and gets security updates with the OS. Pin the major version in deployment docs and keep the `SAFEWATCH_*_PATH` override. **Not yet solved** (honest gaps): per-process CPU/memory/time limits beyond the application-level timeout and output cap, running FFmpeg as a separate unprivileged user, filesystem/network sandboxing (seccomp, containers), and an FFmpeg security-patch policy. These are Checkpoint 10 work.
+
+### Future scaling
+Move to a **Docker image with a locked-down runtime** (non-root, read-only root FS, memory/CPU limits, no network) when either (a) untrusted-media risk needs stronger isolation than process-level limits, or (b) the job runner becomes a separate worker service. At that point swap `LocalDiskMediaStorage` for an object-store adapter and `ProcessingQueue` for an external queue; both are behind ports already. Managed services remain an option only for specific heavy stages, decided with a privacy review.
+
+## 17. Hardening applied to every FFmpeg invocation
+
+- Executed with `spawn(binary, argsArray, {shell:false})`; the media path is a single argv element after `-i`, never concatenated into a string.
+- The input path is always server-generated (`<uuid>.media`); user filenames never reach a command or the filesystem.
+- `-protocol_whitelist file` and a **forced demuxer** (`-f mov|matroska|avi`) chosen from the already-verified container: FFmpeg will not auto-detect HLS/concat/other demuxers that could read other files or URLs from inside an upload.
+- stdin closed (`-nostdin`, `stdio: 'ignore'`), minimal environment (`PATH` only), stdout capped (4 MB), stderr drained and discarded (never logged or returned), `SIGKILL` on timeout.
+- Output is parsed defensively; raw FFprobe JSON never crosses the API.

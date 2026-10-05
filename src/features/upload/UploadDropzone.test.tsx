@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { createMediaIngestion } from '@/application/mediaIngestion';
 import type { MediaProcessor } from '@/application/mediaProcessor';
+import type { MediaUploader } from '@/application/mediaUploader';
+import { MediaIngestionError } from '@/domain/media/errors';
 import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
 import { UploadDropzone } from './UploadDropzone';
@@ -11,6 +13,7 @@ const okProcessor: MediaProcessor = {
   extractMetadata: async () => normalizeMetadata({ durationSeconds: 125, width: 1920, height: 1080 }, 'browser'),
 };
 const ingestionWith = (processor: MediaProcessor = okProcessor, maxBytes = 10 * MB) => createMediaIngestion({ processor, maxBytes });
+const ffprobeMeta = normalizeMetadata({ durationSeconds: 125, width: 1920, height: 1080, frameRate: 29.97 }, 'ffprobe');
 const group = () => screen.getByRole('group');
 const drop = (file: File) => fireEvent.drop(group(), { dataTransfer: { files: [file] } });
 
@@ -60,10 +63,12 @@ describe('UploadDropzone', () => {
 
     await act(async () => finish());
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
-    expect(screen.getByRole('heading', { name: 'Ready for analysis' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Media ready' })).toBeInTheDocument();
     expect(screen.getByText('2:05')).toBeInTheDocument();
     expect(screen.getByText('1920×1080')).toBeInTheDocument();
-    expect(screen.getByText('Analysis is not available yet')).toBeInTheDocument();
+    expect(screen.getByText('Analysis has not started')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
     expect(group()).not.toHaveAttribute('aria-busy');
   });
 
@@ -132,5 +137,80 @@ describe('UploadDropzone', () => {
     drop(makeFile('b.mp4', HEADERS.mp4));
     expect(screen.getByText('a.mp4')).toBeInTheDocument();
     expect(screen.queryByText('b.mp4')).not.toBeInTheDocument();
+  });
+});
+
+describe('UploadDropzone with a server uploader', () => {
+  const serverAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: { ...ffprobeMeta, videoCodec: 'h264', audioCodec: 'aac', hasAudio: true, hasSubtitles: false }, createdAt: 'x', failure: null,
+  });
+
+  it('shows REAL upload progress, then preparing, then Media ready / Analysis not started with server facts', async () => {
+    let progress!: (n: number) => void;
+    let finish!: () => void;
+    const uploader: MediaUploader = {
+      upload: (_f, h) => new Promise((resolve) => {
+        progress = (n) => h?.onProgress?.(n);
+        finish = () => resolve({ asset: serverAsset(), analysis: { status: 'not_started' } });
+      }),
+      remove: vi.fn(async () => undefined),
+    };
+    render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Uploading your video' })).toBeInTheDocument());
+    expect(screen.getByRole('progressbar', { name: 'Uploading video' })).toHaveAttribute('aria-valuenow', '0');
+
+    act(() => progress(0.43));
+    expect(screen.getByRole('progressbar', { name: 'Uploading video' })).toHaveAttribute('aria-valuenow', '43');
+    expect(screen.getByText('43%')).toBeInTheDocument();
+
+    act(() => progress(1)); // bytes sent; server is now inspecting: no measurable progress
+    expect(screen.getByRole('heading', { name: 'Preparing your media...' })).toBeInTheDocument();
+    expect(screen.getByRole('progressbar', { name: 'Preparing your media' })).not.toHaveAttribute('aria-valuenow');
+
+    await act(async () => finish());
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    expect(screen.getByRole('heading', { name: 'Media ready' })).toBeInTheDocument();
+    for (const t of ['2:05', '1920×1080', '29.97 fps', 'H264', 'AAC', 'None']) expect(screen.getByText(t)).toBeInTheDocument();
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+    expect(screen.getByText(/uploaded to the SafeWatch server and is stored temporarily/)).toBeInTheDocument();
+    expect(screen.queryByText(/stays on your device/)).not.toBeInTheDocument();
+  });
+
+  it('never shows a fabricated percentage before real progress arrives', async () => {
+    const uploader: MediaUploader = { upload: () => new Promise(() => undefined), remove: vi.fn(async () => undefined) };
+    render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'processing'));
+    expect(screen.getByText('0%')).toBeInTheDocument(); // honest starting point; nothing is simulated
+    expect(screen.queryByText(/^[1-9]\d?%$/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['server-unreachable', 'We could not reach the SafeWatch server', /npm run dev:server/],
+    ['server-busy', 'SafeWatch is busy right now', /try again/i],
+    ['upload-failed', 'The upload did not finish', /connection/i],
+    ['invalid-media', 'This does not look like a valid video', /damaged or renamed/],
+    ['timeout', 'Preparing took too long', /try again/i],
+    ['storage-failure', 'We could not store this video', /try again/i],
+  ] as const)('maps server failure %s to readable copy', async (code, title, body) => {
+    const uploader: MediaUploader = { upload: async () => { throw new MediaIngestionError(code); }, remove: vi.fn(async () => undefined) };
+    render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(title));
+    expect(screen.getByRole('alert')).toHaveTextContent(body);
+    expect(screen.getByRole('button', { name: 'Choose another video' })).toBeEnabled();
+  });
+
+  it('releases the previous server upload when the user chooses a different video', async () => {
+    const remove = vi.fn(async () => undefined);
+    const uploader: MediaUploader = { upload: async () => ({ asset: serverAsset(), analysis: { status: 'not_started' } }), remove };
+    render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    drop(makeFile('other.mp4', HEADERS.mp4));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('srv-1'));
   });
 });

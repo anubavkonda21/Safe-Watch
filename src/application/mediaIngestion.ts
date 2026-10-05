@@ -1,22 +1,35 @@
+import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaAsset } from '@/domain/media/asset';
 import { PENDING_METADATA } from '@/domain/media/asset';
 import { CONTAINER_INFO, SNIFF_BYTES, detectContainer } from '@/domain/media/container';
 import { MediaIngestionError } from '@/domain/media/errors';
 import { containerMatchesExtension, sanitizeFilename, validateMediaFile } from '@/domain/media/validation';
 import type { MediaProcessor } from './mediaProcessor';
+import type { MediaUploader } from './mediaUploader';
 
-export interface MediaIngestionDeps {
-  processor: MediaProcessor;
+export type MediaIngestionDeps = {
   maxBytes: number;
   newId?: () => string;
   now?: () => Date;
+} & (
+  | { processor: MediaProcessor; uploader?: undefined }
+  | { uploader: MediaUploader; processor?: undefined }
+);
+
+export interface PreparedMedia {
+  asset: MediaAsset;
+  analysis: AnalysisStatus;
 }
 
 export interface MediaIngestion {
+  /** `server`: files are uploaded and inspected remotely. `local`: inspected in the browser only. */
+  readonly mode: 'local' | 'server';
   /** Validates the file (name, MIME, size, content signature) and creates an `accepted` asset. Throws MediaIngestionError. */
   accept(file: File): Promise<MediaAsset>;
-  /** Reads technical metadata through the processor and returns the asset with it. Throws MediaIngestionError. */
-  prepare(file: File, asset: MediaAsset): Promise<MediaAsset>;
+  /** Makes the asset ready: uploads it (server mode) or reads metadata locally. Throws MediaIngestionError. */
+  prepare(file: File, asset: MediaAsset, hooks?: { onProgress?: (fraction: number) => void }): Promise<PreparedMedia>;
+  /** Best-effort removal of server-side data for a finished asset. */
+  remove(asset: MediaAsset): Promise<void>;
 }
 
 export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
@@ -24,6 +37,8 @@ export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
   const now = deps.now ?? (() => new Date());
 
   return {
+    mode: deps.uploader ? 'server' : 'local',
+
     async accept(file) {
       const check = validateMediaFile(file, deps.maxBytes);
       if (!check.ok) throw new MediaIngestionError(check.code);
@@ -55,13 +70,22 @@ export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
       };
     },
 
-    async prepare(file, asset) {
+    async prepare(file, asset, hooks = {}) {
       try {
+        if (deps.uploader) {
+          const { asset: remote, analysis } = await deps.uploader.upload(file, { onProgress: hooks.onProgress });
+          if (remote.status === 'failed') throw new MediaIngestionError(remote.failure?.code ?? 'processing-failed');
+          return { asset: remote, analysis: analysis.status };
+        }
         const metadata = await deps.processor.extractMetadata(file);
-        return { ...asset, metadata };
+        return { asset: { ...asset, metadata }, analysis: 'not_started' };
       } catch (e) {
         throw e instanceof MediaIngestionError ? e : new MediaIngestionError('processing-failed');
       }
+    },
+
+    async remove(asset) {
+      await deps.uploader?.remove(asset.id);
     },
   };
 }

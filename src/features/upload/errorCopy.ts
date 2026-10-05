@@ -26,6 +26,12 @@ export function errorCopy(code: MediaErrorCode, maxBytes: number): ErrorCopy {
       return { title: 'Preparing took too long', body: 'The video could not be prepared in time. Try again, or choose a smaller file.' };
     case 'storage-failure':
       return { title: 'We could not store this video', body: 'Saving the file failed. Try again in a moment.' };
+    case 'upload-failed':
+      return { title: 'The upload did not finish', body: 'The connection was interrupted or took too long. Check your connection and try again.' };
+    case 'server-busy':
+      return { title: 'SafeWatch is busy right now', body: 'Too many videos are being processed. Wait a moment and try again.' };
+    case 'server-unreachable':
+      return { title: 'We could not reach the SafeWatch server', body: 'Check your connection. If you are running SafeWatch locally, start the server with "npm run dev:server".' };
     case 'processing-failed':
       return { title: 'We could not prepare this video', body: 'Reading the file failed unexpectedly. It may have been moved or removed. Choose the file again.' };
   }

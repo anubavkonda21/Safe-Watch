@@ -2,9 +2,10 @@
  * Typed failure causes for media ingestion. The presentation layer maps each
  * code to user-facing "what / why / how to fix" copy; internals never leak.
  *
- * `timeout` and `storage-failure` are reserved for the server adapter
- * (Checkpoint 2); the browser adapter degrades to "metadata unavailable"
- * instead of failing on timeouts.
+ * `timeout`, `storage-failure`, `upload-failed`, `server-busy` and
+ * `server-unreachable` come from the server pipeline (Checkpoint 2); the
+ * browser-only adapter degrades to "metadata unavailable" instead of failing
+ * on timeouts.
  */
 export const MEDIA_ERROR_CODES = [
   'unsupported-type',
@@ -14,6 +15,9 @@ export const MEDIA_ERROR_CODES = [
   'processing-failed',
   'timeout',
   'storage-failure',
+  'upload-failed',
+  'server-busy',
+  'server-unreachable',
 ] as const;
 
 export type MediaErrorCode = (typeof MEDIA_ERROR_CODES)[number];

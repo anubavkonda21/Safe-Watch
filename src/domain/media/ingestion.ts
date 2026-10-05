@@ -1,3 +1,4 @@
+import type { AnalysisStatus } from '../analysis/job';
 import type { MediaAsset } from './asset';
 import { toFailure, type MediaFailure } from './errors';
 
@@ -10,21 +11,29 @@ import { toFailure, type MediaFailure } from './errors';
  *
  * `idle`/`validating` exist before an asset does; accepted/processing/ready
  * carry the asset; `failed` carries only a typed failure.
+ *
+ * While processing, `phase` says what is happening: `uploading` (bytes are
+ * going to the server; `uploadFraction` is real measured progress) or
+ * `inspecting` (the server/browser is reading the media; no measurable
+ * progress). `ready` is MEDIA readiness; `analysis` is tracked separately.
  * Events that are illegal in the current state are ignored (state returned as-is).
  */
 export type IngestionState =
   | { status: 'idle' }
   | { status: 'validating'; fileName: string }
   | { status: 'accepted'; asset: MediaAsset }
-  | { status: 'processing'; asset: MediaAsset }
-  | { status: 'ready'; asset: MediaAsset }
+  | { status: 'processing'; asset: MediaAsset; phase: ProcessingPhase; uploadFraction: number | null }
+  | { status: 'ready'; asset: MediaAsset; analysis: AnalysisStatus }
   | { status: 'failed'; failure: MediaFailure };
+
+export type ProcessingPhase = 'uploading' | 'inspecting';
 
 export type IngestionEvent =
   | { type: 'select'; fileName: string }
   | { type: 'accepted'; asset: MediaAsset }
-  | { type: 'process' }
-  | { type: 'ready'; asset: MediaAsset }
+  | { type: 'process'; phase?: ProcessingPhase }
+  | { type: 'progress'; fraction: number }
+  | { type: 'ready'; asset: MediaAsset; analysis?: AnalysisStatus }
   | { type: 'fail'; error: unknown }
   | { type: 'reset' };
 
@@ -42,11 +51,23 @@ export function ingestionReducer(state: IngestionState, event: IngestionEvent): 
         : state;
     case 'process':
       return state.status === 'accepted'
-        ? { status: 'processing', asset: { ...state.asset, status: 'processing' } }
+        ? {
+            status: 'processing',
+            asset: { ...state.asset, status: 'processing' },
+            phase: event.phase ?? 'inspecting',
+            uploadFraction: event.phase === 'uploading' ? 0 : null,
+          }
         : state;
+    case 'progress': {
+      if (state.status !== 'processing' || state.phase !== 'uploading') return state;
+      const fraction = Math.min(1, Math.max(0, event.fraction));
+      // Never move backwards; reaching 100% means the upload is done and the server is now inspecting.
+      const next = Math.max(fraction, state.uploadFraction ?? 0);
+      return { ...state, uploadFraction: next, phase: next >= 1 ? 'inspecting' : 'uploading' };
+    }
     case 'ready':
       return state.status === 'processing'
-        ? { status: 'ready', asset: { ...event.asset, status: 'ready' } }
+        ? { status: 'ready', asset: { ...event.asset, status: 'ready' }, analysis: event.analysis ?? 'not_started' }
         : state;
     case 'fail':
       return state.status === 'validating' || state.status === 'processing'

@@ -20,8 +20,10 @@
 .sw-upload .sw-btn { margin-top: var(--sw-s-3); }
 .sw-upload__alert { width: 100%; max-width: 480px; text-align: left; margin-top: var(--sw-s-2); }
 .sw-upload__progress { width: 100%; max-width: 320px; margin-top: var(--sw-s-3); }
+.sw-upload__percent { margin-top: var(--sw-s-2); }
+.sw-upload__status { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sw-s-2); margin-top: var(--sw-s-2); }
 .sw-upload__filename { max-width: 100%; overflow-wrap: anywhere; font-weight: 500; }
-.sw-upload__facts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sw-s-2) var(--sw-s-8); margin: var(--sw-s-2) 0 0; }
+.sw-upload__facts { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--sw-s-3) var(--sw-s-6); margin: var(--sw-s-2) 0 0; }
 .sw-upload__facts dt { color: var(--sw-text-2); }
 .sw-upload__facts dd { margin: 0; }
 

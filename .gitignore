@@ -8,3 +8,6 @@ coverage
 *.log
 .claude
 *.tsbuildinfo
+dist-server
+.safewatch-storage
+.vitest
