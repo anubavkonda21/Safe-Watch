@@ -1,4 +1,5 @@
 import type { AnalysisState } from '../analysis/job';
+import type { ExtractionState, MediaExtraction } from '../extraction/extraction';
 import type { MediaAsset } from '../media/asset';
 import type { MediaErrorCode } from '../media/errors';
 
@@ -9,6 +10,7 @@ import type { MediaErrorCode } from '../media/errors';
 export const API_PATHS = {
   health: '/api/health',
   media: '/api/media',
+  extraction: (id: string) => `/api/media/${encodeURIComponent(id)}/extraction`,
 } as const;
 
 /** Original filename travels in a header (URI-encoded), never in the URL or as a path. */
@@ -35,7 +37,13 @@ export interface ApiErrorBody {
 
 export interface MediaResource {
   asset: MediaAsset;
+  /** Extraction state only; the full manifest is at `GET /api/media/:id/extraction`. */
+  extraction: ExtractionState;
   analysis: AnalysisState;
+}
+
+export interface ExtractionResponse {
+  extraction: MediaExtraction;
 }
 
 export interface MediaResponse {

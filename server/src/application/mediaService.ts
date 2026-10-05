@@ -4,10 +4,12 @@ import { CONTAINER_INFO, SNIFF_BYTES, detectContainer, type ContainerFormat } fr
 import { MediaIngestionError, type MediaErrorCode } from '@/domain/media/errors';
 import { containerMatchesExtension, sanitizeFilename, validateMediaFile } from '@/domain/media/validation';
 import type { MediaResource } from '@/domain/api/contract';
+import type { MediaExtraction } from '@/domain/extraction/extraction';
 import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
 import { StorageError } from './ports';
+import type { ExtractionScheduler } from './extractionService';
 import type { ProcessingQueue } from './processingQueue';
 
 export interface MediaServiceDeps {
@@ -15,6 +17,8 @@ export interface MediaServiceDeps {
   repository: MediaRepository;
   processor: ServerMediaProcessor;
   queue: ProcessingQueue;
+  /** Optional: when present, extraction is scheduled as soon as media is ready and cancelled before media is deleted. */
+  extraction?: ExtractionScheduler;
   logger: Logger;
   limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number };
   now?: () => number;
@@ -127,8 +131,16 @@ export class MediaService {
     return toResource(record);
   }
 
+  /** Full extraction manifest (assets and metrics). Contains no paths or tool output. */
+  getExtraction(id: string): MediaExtraction {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record) throw new MediaServiceError('NOT_FOUND');
+    return record.extraction;
+  }
+
   async delete(id: string): Promise<void> {
     if (!isMediaId(id)) return;
+    this.deps.extraction?.cancel(id);
     this.deps.repository.delete(id);
     await this.safeDelete(id);
     this.deps.logger.info('media deleted', { op: 'delete', mediaId: id });
@@ -138,6 +150,7 @@ export class MediaService {
   async sweep(): Promise<{ expired: number; orphans: number }> {
     const expired = this.deps.repository.expired(this.now());
     for (const record of expired) {
+      this.deps.extraction?.cancel(record.asset.id);
       this.deps.repository.delete(record.asset.id);
       await this.safeDelete(record.asset.id);
     }
@@ -212,6 +225,7 @@ export class MediaService {
           if (!latest) { await this.safeDelete(id); return; }
           repository.set(markReady(latest, metadata));
           logger.info('media ready', { op: 'process', requestId, mediaId: id, status: 'ready', durationMs: this.now() - started });
+          this.deps.extraction?.schedule(id, requestId);
         } catch (e) {
           const code: MediaErrorCode = timeout.signal.aborted ? 'timeout' : e instanceof MediaIngestionError ? e.code : 'processing-failed';
           const latest = repository.get(id);

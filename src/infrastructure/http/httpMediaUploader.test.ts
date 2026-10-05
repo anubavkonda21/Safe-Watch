@@ -1,12 +1,13 @@
 import type { MediaResource } from '@/domain/api/contract';
 import { PENDING_METADATA, type MediaAsset } from '@/domain/media/asset';
 import { HttpMediaUploader } from './httpMediaUploader';
+import { completedExtraction, processingExtraction } from '@/test/extraction';
 
 const asset = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaAsset => ({
   id: 'srv-1', filename: 'a.mp4', mimeType: 'video/mp4', container: 'mp4', typeLabel: 'MP4 video', sizeBytes: 5,
   status, metadata: PENDING_METADATA, createdAt: 'x', failure: null, ...extra,
 });
-const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' } });
+const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } });
 
 class FakeXhr {
   static last: FakeXhr;
@@ -125,5 +126,42 @@ describe('HttpMediaUploader', () => {
     expect(f).toHaveBeenCalledWith('http://api.test/api/media/abc', expect.objectContaining({ method: 'DELETE' }));
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline'); }));
     await expect(make().remove('abc')).resolves.toBeUndefined();
+  });
+
+  describe('waitForExtraction', () => {
+    const respond = (e: unknown) => new Response(JSON.stringify({ extraction: e }), { status: 200 });
+    it('polls the extraction endpoint, reports each status/phase change once, and resolves when completed', async () => {
+      const seq = [processingExtraction('srv-1', 'extracting-audio'), processingExtraction('srv-1', 'extracting-audio'), processingExtraction('srv-1', 'sampling-frames'), completedExtraction('srv-1')];
+      const f = vi.fn(async () => respond(seq.shift()));
+      vi.stubGlobal('fetch', f);
+      const onUpdate = vi.fn();
+      const result = await make().waitForExtraction('srv-1', { onUpdate });
+      expect(result.status).toBe('completed');
+      expect(onUpdate.mock.calls.map((c) => `${c[0].status}:${c[0].phase}`)).toEqual(['processing:extracting-audio', 'processing:sampling-frames', 'completed:null']);
+      expect(f).toHaveBeenCalledWith('http://api.test/api/media/srv-1/extraction', expect.anything());
+    });
+    it('returns a failed extraction as a value (the caller shows it)', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond({ ...completedExtraction('srv-1'), status: 'failed', errors: [{ code: 'timeout', stage: 'frames', fatal: true, streamIndex: null }] })));
+      await expect(make().waitForExtraction('srv-1')).resolves.toMatchObject({ status: 'failed' });
+    });
+    it('gives up with a typed timeout', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingExtraction('srv-1', 'preparing'))));
+      await expect(make({ extractionTimeoutMs: 30 }).waitForExtraction('srv-1')).rejects.toMatchObject({ code: 'timeout' });
+    });
+    it('reports server-unreachable after repeated network failures and maps HTTP errors', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+      await expect(make().waitForExtraction('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 502 })));
+      await expect(make().waitForExtraction('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'NOT_FOUND', message: 'x', requestId: 'r' } }), { status: 404 })));
+      await expect(make().waitForExtraction('srv-1')).rejects.toMatchObject({ code: 'processing-failed' });
+    });
+    it('stops when aborted', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingExtraction('srv-1', 'preparing'))));
+      const ac = new AbortController();
+      const p = make().waitForExtraction('srv-1', { signal: ac.signal });
+      ac.abort();
+      await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
+    });
   });
 });

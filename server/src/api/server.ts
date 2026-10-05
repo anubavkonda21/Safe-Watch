@@ -86,6 +86,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
       return sendJson(res, 202, { media: resource }, { location: `${API_PATHS.media}/${resource.asset.id}` });
     }
 
+    const extractionMatch = /^\/api\/media\/([^/]+)\/extraction$/.exec(path);
+    if (extractionMatch?.[1] && req.method === 'GET') {
+      return sendJson(res, 200, { extraction: deps.mediaService.getExtraction(extractionMatch[1]) });
+    }
+
     const match = /^\/api\/media\/([^/]+)$/.exec(path);
     if (match?.[1] && (req.method === 'GET' || req.method === 'DELETE')) {
       const id = match[1];
@@ -102,7 +107,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
     if (!(e instanceof MediaServiceError)) deps.logger.error('unhandled request error', { op: 'http', requestId, reason: e instanceof Error ? e.name : 'unknown' });
     sendError(req, res, code, requestId, consumedBody);
   } finally {
-    deps.logger.info('request', { op: 'http', requestId, method: req.method, path: path.startsWith('/api/media/') ? '/api/media/:id' : path, status: res.statusCode, errorCode: code, durationMs: Date.now() - started });
+    deps.logger.info('request', { op: 'http', requestId, method: req.method, path: path.startsWith('/api/media/') ? path.replace(/^\/api\/media\/[^/]+/, '/api/media/:id') : path, status: res.statusCode, errorCode: code, durationMs: Date.now() - started });
   }
 }
 

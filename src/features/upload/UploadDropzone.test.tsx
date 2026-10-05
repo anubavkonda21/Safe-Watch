@@ -6,9 +6,13 @@ import type { MediaUploader } from '@/application/mediaUploader';
 import { MediaIngestionError } from '@/domain/media/errors';
 import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
+import { completedExtraction, processingExtraction } from '@/test/extraction';
+import { unavailableExtraction } from '@/domain/extraction/extraction';
 import { UploadDropzone } from './UploadDropzone';
 
 const MB = 1024 * 1024;
+/** Extraction that never reports: keeps these tests about upload behaviour only. */
+const neverSettles = () => new Promise<never>(() => undefined);
 const okProcessor: MediaProcessor = {
   extractMetadata: async () => normalizeMetadata({ durationSeconds: 125, width: 1920, height: 1080 }, 'browser'),
 };
@@ -152,9 +156,9 @@ describe('UploadDropzone with a server uploader', () => {
     const uploader: MediaUploader = {
       upload: (_f, h) => new Promise((resolve) => {
         progress = (n) => h?.onProgress?.(n);
-        finish = () => resolve({ asset: serverAsset(), analysis: { status: 'not_started' } });
+        finish = () => resolve({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } });
       }),
-      remove: vi.fn(async () => undefined),
+      waitForExtraction: neverSettles, remove: vi.fn(async () => undefined),
     };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
@@ -173,14 +177,15 @@ describe('UploadDropzone with a server uploader', () => {
     await act(async () => finish());
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
     expect(screen.getByRole('heading', { name: 'Media ready' })).toBeInTheDocument();
-    for (const t of ['2:05', '1920×1080', '29.97 fps', 'H264', 'AAC', 'None']) expect(screen.getByText(t)).toBeInTheDocument();
+    for (const t of ['2:05', '1920×1080', '29.97 fps', 'H264', 'AAC']) expect(screen.getByText(t)).toBeInTheDocument();
+    expect(screen.getAllByText('None').length).toBeGreaterThan(0); // subtitles: none
     expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
-    expect(screen.getByText(/uploaded to the SafeWatch server and is stored temporarily/)).toBeInTheDocument();
+    expect(screen.getByText(/uploaded to the SafeWatch server and is deleted automatically/)).toBeInTheDocument();
     expect(screen.queryByText(/stays on your device/)).not.toBeInTheDocument();
   });
 
   it('never shows a fabricated percentage before real progress arrives', async () => {
-    const uploader: MediaUploader = { upload: () => new Promise(() => undefined), remove: vi.fn(async () => undefined) };
+    const uploader: MediaUploader = { upload: () => new Promise(() => undefined), waitForExtraction: neverSettles, remove: vi.fn(async () => undefined) };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'processing'));
@@ -196,7 +201,7 @@ describe('UploadDropzone with a server uploader', () => {
     ['timeout', 'Preparing took too long', /try again/i],
     ['storage-failure', 'We could not store this video', /try again/i],
   ] as const)('maps server failure %s to readable copy', async (code, title, body) => {
-    const uploader: MediaUploader = { upload: async () => { throw new MediaIngestionError(code); }, remove: vi.fn(async () => undefined) };
+    const uploader: MediaUploader = { upload: async () => { throw new MediaIngestionError(code); }, waitForExtraction: neverSettles, remove: vi.fn(async () => undefined) };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(title));
@@ -206,11 +211,163 @@ describe('UploadDropzone with a server uploader', () => {
 
   it('releases the previous server upload when the user chooses a different video', async () => {
     const remove = vi.fn(async () => undefined);
-    const uploader: MediaUploader = { upload: async () => ({ asset: serverAsset(), analysis: { status: 'not_started' } }), remove };
+    const uploader: MediaUploader = { upload: async () => ({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } }), waitForExtraction: neverSettles, remove };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
     drop(makeFile('other.mp4', HEADERS.mp4));
     await waitFor(() => expect(remove).toHaveBeenCalledWith('srv-1'));
+  });
+});
+
+describe('UploadDropzone extraction (analysis assets) — separate from upload', () => {
+  const readyAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: ffprobeMeta, createdAt: 'x', failure: null,
+  });
+  const withExtraction = (waitForExtraction: MediaUploader['waitForExtraction']) => {
+    const uploader: MediaUploader = {
+      upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } }),
+      waitForExtraction, remove: vi.fn(async () => undefined),
+    };
+    return createMediaIngestion({ uploader, maxBytes: 10 * MB });
+  };
+
+  it('shows MEDIA READY immediately and tracks extraction as its own phase-based step (no percentages)', async () => {
+    let push!: (e: ReturnType<typeof processingExtraction>) => void;
+    let finish!: () => void;
+    const ingestion = withExtraction((id, hooks) => new Promise((resolve) => {
+      push = (e) => hooks?.onUpdate?.(e);
+      finish = () => { const done = completedExtraction(id); hooks?.onUpdate?.(done); resolve(done); };
+    }));
+    render(<UploadDropzone ingestion={ingestion} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    expect(screen.getByRole('heading', { name: 'Media ready' })).toBeInTheDocument();
+    expect(screen.getByText('Preparing analysis assets')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+    expect(screen.getByText('Extraction: queued')).toBeInTheDocument();
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+
+    act(() => push(processingExtraction('srv-1', 'extracting-subtitles')));
+    expect(screen.getByText('Extraction: in progress')).toBeInTheDocument();
+    expect(screen.getByText(/Extracting subtitles…/)).toBeInTheDocument();
+    const steps = screen.getAllByRole('listitem').map((li) => li.textContent);
+    expect(steps).toEqual(expect.arrayContaining(['Audio ready', 'Subtitles in progress', 'Frames waiting']));
+    expect(screen.getByRole('progressbar', { name: 'Preparing analysis assets' })).not.toHaveAttribute('aria-valuenow'); // never a fabricated number
+    expect(document.body.textContent).not.toMatch(/\d+%/);
+
+    await act(async () => finish());
+    expect(await screen.findByText('Media prepared. Ready for SafeWatch analysis.')).toBeInTheDocument();
+    expect(screen.getByText('Extraction: completed')).toBeInTheDocument();
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+    expect(screen.getByText(/has not analyzed this video yet/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/is safe|analysis complete/i);
+  });
+
+  it('summarises tracks, frames and preparation time, with expandable details', async () => {
+    render(<UploadDropzone ingestion={withExtraction(async (id) => completedExtraction(id))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Media prepared. Ready for SafeWatch analysis.');
+    const panel = screen.getByRole('region', { name: 'Analysis assets' });
+    expect(panel).toHaveTextContent('Audio1 track');
+    expect(panel).toHaveTextContent('Subtitles1 track');
+    expect(panel).toHaveTextContent('Frames2 sampled');
+    expect(panel).toHaveTextContent('Prepared in1.2 s');
+    const details = screen.getByText('Extraction details');
+    expect(details.closest('details')).not.toHaveAttribute('open');
+    await userEvent.click(details);
+    expect(details.closest('details')).toHaveAttribute('open');
+    expect(panel).toHaveTextContent('English');
+    expect(panel).toHaveTextContent('AAC → WAV 16 kHz mono');
+    expect(panel).toHaveTextContent('Spanish');
+    expect(panel).toHaveTextContent('2 cues');
+    expect(panel).toHaveTextContent('about every 10 s');
+    expect(panel).toHaveTextContent('JPEG');
+  });
+
+  it('shows image subtitles as unsupported, never as text, and lists skipped items', async () => {
+    const { subtitleTrack } = await import('@/test/extraction');
+    const manifest = (id: string) => completedExtraction(id, {
+      subtitles: [subtitleTrack({ id: 'sub-0', kind: 'image', codec: 'hdmv_pgs_subtitle', textExtraction: 'unsupported', cueCount: 0, cues: [], language: 'jpn' })],
+      errors: [{ code: 'frame-unavailable', stage: 'frames', fatal: false, streamIndex: null }],
+    });
+    render(<UploadDropzone ingestion={withExtraction(async (id) => manifest(id))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Media prepared. Ready for SafeWatch analysis.');
+    await userEvent.click(screen.getByText('Extraction details'));
+    const panel = screen.getByRole('region', { name: 'Analysis assets' });
+    expect(panel).toHaveTextContent('Japanese');
+    expect(panel).toHaveTextContent('image subtitles (HDMV_PGS_SUBTITLE), not readable as text');
+    expect(panel).toHaveTextContent('Some items were skipped');
+    expect(panel).toHaveTextContent('a sampled moment had no frame');
+  });
+
+  it('renders untrusted track titles as inert text, never as HTML', async () => {
+    const { audioAsset } = await import('@/test/extraction');
+    const evil = '<img src=x onerror=alert(1)><script>window.__pwned=1</script>';
+    render(<UploadDropzone ingestion={withExtraction(async (id) => completedExtraction(id, { audio: [audioAsset({ title: evil })] }))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Media prepared. Ready for SafeWatch analysis.');
+    await userEvent.click(screen.getByText('Extraction details'));
+    expect(screen.getByRole('region', { name: 'Analysis assets' })).toHaveTextContent(evil);
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+    expect(document.querySelector('script')).toBeNull();
+  });
+
+  it('zero audio and subtitle tracks are shown plainly', async () => {
+    render(<UploadDropzone ingestion={withExtraction(async (id) => completedExtraction(id, { audio: [], subtitles: [] }))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Media prepared. Ready for SafeWatch analysis.');
+    await userEvent.click(screen.getByText('Extraction details'));
+    expect(screen.getByText('No audio track.')).toBeInTheDocument();
+    expect(screen.getByText('No subtitle track.')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Analysis assets' })).toHaveTextContent('Audio0 tracks');
+  });
+
+  it.each([
+    ['timeout', 'Preparing analysis assets took too long', /shorter video/],
+    ['limit-exceeded', 'This video is too large to prepare', /extraction limit/],
+    ['server-busy', 'SafeWatch is busy preparing other videos', /try again/i],
+    ['extraction-failed', 'Analysis assets could not be prepared', /uploading the video again/],
+  ] as const)('a failed extraction (%s) is its own error and media stays READY', async (code, title, body) => {
+    render(<UploadDropzone ingestion={withExtraction(async (id) => unavailableExtraction(id, 'x', code))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(title));
+    expect(screen.getByRole('alert')).toHaveTextContent(body);
+    expect(screen.getByRole('alert')).toHaveTextContent('Your media is still stored and ready.');
+    expect(group()).toHaveAttribute('data-state', 'ready');
+    expect(screen.getByRole('heading', { name: 'Media ready' })).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+    expect(screen.getByText('Extraction: failed')).toBeInTheDocument();
+    expect(screen.queryByText('Media prepared. Ready for SafeWatch analysis.')).not.toBeInTheDocument();
+  });
+
+  it('losing the server while following extraction is reported as an extraction problem, not a media failure', async () => {
+    render(<UploadDropzone ingestion={withExtraction(async () => { throw new MediaIngestionError('server-unreachable'); })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('We lost contact with the SafeWatch server'));
+    expect(group()).toHaveAttribute('data-state', 'ready');
+  });
+
+  it('ignores extraction updates from a replaced upload', async () => {
+    let first!: (e: ReturnType<typeof processingExtraction>) => void;
+    const ingestion = withExtraction((id, hooks) => new Promise(() => { if (!first) first = (e) => hooks?.onUpdate?.({ ...e, mediaId: id }); }));
+    render(<UploadDropzone ingestion={ingestion} />);
+    drop(makeFile('one.mp4', HEADERS.mp4));
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    drop(makeFile('two.mp4', HEADERS.mp4));
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    act(() => first(processingExtraction('srv-1', 'sampling-frames')));
+    expect(screen.queryByText(/Sampling frames…/)).not.toBeInTheDocument();
+  });
+
+  it('browser-only mode shows no extraction UI (nothing is extracted locally)', async () => {
+    render(<UploadDropzone ingestion={ingestionWith()} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
+    expect(screen.queryByRole('region', { name: 'Analysis assets' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Extraction:/)).not.toBeInTheDocument();
   });
 });

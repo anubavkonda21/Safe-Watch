@@ -7,6 +7,11 @@ export interface LocalMediaFile {
   readonly path: string;
 }
 
+/** A directory for derived assets of one media item. Valid only inside `withExtractionDir`; the path never leaves the server. */
+export interface ExtractionWorkspace {
+  readonly dir: string;
+}
+
 export type StorageErrorKind = 'too-large' | 'not-found' | 'aborted' | 'failed';
 
 export class StorageError extends Error {
@@ -30,7 +35,14 @@ export interface MediaStorage {
   read(id: string): AsyncIterable<Uint8Array>;
   /** Runs `fn` with a local file for tools that need one (object-store adapters would download to scratch space first). */
   withLocalFile<T>(id: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T>;
-  /** Idempotent. */
+  /** Runs `fn` with a private directory for this media's derived assets (audio, frames), creating it if needed. */
+  withExtractionDir<T>(id: string, fn: (workspace: ExtractionWorkspace) => Promise<T>): Promise<T>;
+  /** Reads a derived asset by its logical artifact name (e.g. `frames/frm-00001.jpg`). Names are validated; paths are never accepted. */
+  readArtifact(id: string, artifact: string): AsyncIterable<Uint8Array>;
+  deleteArtifact(id: string, artifact: string): Promise<void>;
+  /** Removes every derived asset of this media. Idempotent. */
+  deleteExtraction(id: string): Promise<void>;
+  /** Removes the original AND all derived assets. Idempotent. */
   delete(id: string): Promise<void>;
   /** Removes stored files older than `olderThanMs` (orphans left by failed deletes or crashes). */
   cleanup(options: { olderThanMs: number }): Promise<{ removed: number }>;

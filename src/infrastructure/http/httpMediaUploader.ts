@@ -1,5 +1,6 @@
 import type { MediaUploader, UploadHooks } from '@/application/mediaUploader';
-import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type MediaResource, type MediaResponse } from '@/domain/api/contract';
+import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse } from '@/domain/api/contract';
+import type { MediaExtraction } from '@/domain/extraction/extraction';
 import { MediaIngestionError } from '@/domain/media/errors';
 import { sanitizeFilename } from '@/domain/media/validation';
 
@@ -8,6 +9,8 @@ export interface HttpMediaUploaderOptions {
   pollIntervalMs?: number;
   /** Give up waiting for server-side processing after this long. */
   pollTimeoutMs?: number;
+  /** Give up waiting for extraction after this long. */
+  extractionTimeoutMs?: number;
 }
 
 /**
@@ -20,15 +23,41 @@ export interface HttpMediaUploaderOptions {
 export class HttpMediaUploader implements MediaUploader {
   private readonly pollIntervalMs: number;
   private readonly pollTimeoutMs: number;
+  private readonly extractionTimeoutMs: number;
 
   constructor(private readonly options: HttpMediaUploaderOptions) {
     this.pollIntervalMs = options.pollIntervalMs ?? 500;
     this.pollTimeoutMs = options.pollTimeoutMs ?? 120_000;
+    this.extractionTimeoutMs = options.extractionTimeoutMs ?? 20 * 60_000;
   }
 
   async upload(file: File, hooks: UploadHooks = {}): Promise<MediaResource> {
     const created = await this.post(file, hooks);
     return this.waitUntilSettled(created, hooks.signal);
+  }
+
+  async waitForExtraction(mediaId: string, hooks: { onUpdate?: (e: MediaExtraction) => void; signal?: AbortSignal } = {}): Promise<MediaExtraction> {
+    const deadline = Date.now() + this.extractionTimeoutMs;
+    let lastKey = '';
+    let failures = 0;
+    for (;;) {
+      if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
+      try {
+        const res = await fetch(`${this.options.baseUrl}${API_PATHS.extraction(mediaId)}`, { signal: hooks.signal });
+        const body = parse(await res.text());
+        if (!res.ok || !isExtractionResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
+        failures = 0;
+        const { extraction } = body;
+        const key = `${extraction.status}|${extraction.phase}`;
+        if (key !== lastKey) { lastKey = key; hooks.onUpdate?.(extraction); }
+        if (extraction.status === 'completed' || extraction.status === 'failed') return extraction;
+      } catch (e) {
+        if (e instanceof MediaIngestionError) throw e;
+        if (++failures >= 3) throw new MediaIngestionError('server-unreachable');
+      }
+      if (Date.now() > deadline) throw new MediaIngestionError('timeout');
+      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+    }
   }
 
   async remove(mediaId: string): Promise<void> {
@@ -93,6 +122,10 @@ export class HttpMediaUploader implements MediaUploader {
 
 function parse(text: string): unknown {
   try { return JSON.parse(text); } catch { return null; }
+}
+
+function isExtractionResponse(v: unknown): v is ExtractionResponse {
+  return typeof v === 'object' && v !== null && 'extraction' in v && typeof (v as { extraction: { status?: unknown } }).extraction?.status === 'string';
 }
 
 function isMediaResponse(v: unknown): v is MediaResponse {

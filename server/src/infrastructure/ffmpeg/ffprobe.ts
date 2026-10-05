@@ -1,6 +1,9 @@
 import type { ContainerFormat } from '@/domain/media/container';
 import { normalizeMetadata } from '@/domain/media/metadata';
 import type { MediaMetadata } from '@/domain/media/asset';
+import type { TrackDisposition } from '@/domain/extraction/extraction';
+import { normalizeLanguage, noDisposition, sanitizeMetadataText } from '@/domain/extraction/subtitles';
+import type { StreamInventory } from '../../application/extractionTypes';
 
 /**
  * Demuxer forced for each container the signature check allows. Forcing the
@@ -90,4 +93,57 @@ export function summaryToMetadata(summary: ProbeSummary): MediaMetadata | null {
     hasAudio: summary.hasAudio,
     hasSubtitles: summary.hasSubtitles,
   };
+}
+
+/**
+ * Input arguments shared by every extraction command: only the `file`
+ * protocol, and the demuxer forced from the verified container. Always ends
+ * with `-i <path>`.
+ */
+export const inputArgs = (path: string, container: ContainerFormat): string[] => ['-protocol_whitelist', 'file', '-f', DEMUXER[container], '-i', path];
+
+const intOrNull = (v: unknown): number | null => {
+  const n = typeof v === 'string' ? Number(v) : v;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0 ? n : null;
+};
+
+function dispositionOf(stream: Record<string, unknown>): TrackDisposition {
+  const d = isObject(stream.disposition) ? stream.disposition : {};
+  const on = (k: string) => d[k] === 1;
+  return { ...noDisposition(), default: on('default'), forced: on('forced'), original: on('original'), hearingImpaired: on('hearing_impaired'), commentary: on('comment') };
+}
+
+/**
+ * Normalised stream inventory (audio and subtitle tracks, in container order)
+ * from raw FFprobe JSON. Tags are untrusted text and are sanitised here.
+ * Returns null if the shape is unusable.
+ */
+export function summarizeStreams(json: unknown): StreamInventory | null {
+  const base = summarizeProbe(json);
+  if (!base || !isObject(json) || !Array.isArray(json.streams)) return null;
+  const inventory: StreamInventory = {
+    durationSeconds: base.durationSeconds,
+    video: base.video ? { width: base.video.width, height: base.video.height } : null,
+    audio: [],
+    subtitles: [],
+  };
+  for (const raw of json.streams) {
+    if (!isObject(raw)) continue;
+    const streamIndex = intOrNull(raw.index);
+    if (streamIndex === null) continue;
+    const tags = isObject(raw.tags) ? raw.tags : {};
+    const common = {
+      streamIndex,
+      language: normalizeLanguage(tags.language),
+      title: sanitizeMetadataText(tags.title),
+      disposition: dispositionOf(raw),
+      codec: str(raw.codec_name),
+    };
+    if (raw.codec_type === 'audio') {
+      inventory.audio.push({ ...common, sampleRate: intOrNull(raw.sample_rate), channels: intOrNull(raw.channels), bitRate: intOrNull(raw.bit_rate), durationSeconds: num(raw.duration) });
+    } else if (raw.codec_type === 'subtitle') {
+      inventory.subtitles.push(common);
+    }
+  }
+  return inventory;
 }

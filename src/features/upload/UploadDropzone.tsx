@@ -9,11 +9,13 @@ import type { MediaAsset } from '@/domain/media/asset';
 import { formatBytes, formatDuration } from '@/domain/media/format';
 import { isBusy, type ProcessingPhase } from '@/domain/media/ingestion';
 import type { AnalysisStatus } from '@/domain/analysis/job';
+import type { MediaExtraction } from '@/domain/extraction/extraction';
 import { ACCEPTED_VIDEO_EXTENSIONS } from '@/domain/media/validation';
 import { config } from '@/infrastructure/config/env';
 import { defaultMediaIngestion } from '@/infrastructure/mediaIngestionFactory';
 import { cn } from '@/lib/cn';
 import { errorCopy } from './errorCopy';
+import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
 import { useMediaIngestion } from './useMediaIngestion';
 import './upload.css';
 
@@ -119,6 +121,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
           phase={state.status === 'processing' ? state.phase : null}
           uploadFraction={state.status === 'processing' ? state.uploadFraction : null}
           analysis={state.status === 'ready' ? state.analysis : null}
+          extraction={state.status === 'ready' ? state.extraction : null}
           mode={ingestion.mode}
           onReplace={openPicker}
         />
@@ -150,11 +153,12 @@ interface AssetSummaryProps {
   phase: ProcessingPhase | null;
   uploadFraction: number | null;
   analysis: AnalysisStatus | null;
+  extraction: MediaExtraction | null;
   mode: 'local' | 'server';
   onReplace: () => void;
 }
 
-function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, mode, onReplace }: AssetSummaryProps) {
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, mode, onReplace }: AssetSummaryProps) {
   const m = asset.metadata;
   const ready = status === 'ready';
   const uploading = status === 'processing' && phase === 'uploading';
@@ -191,6 +195,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
       {ready && (
         <div className="sw-upload__status" aria-label="Status">
           <Badge tone="success">Media: ready</Badge>
+          {mode === 'server' && <ExtractionBadge extraction={extraction} />}
           <Badge tone="neutral">Analysis: {ANALYSIS_LABEL[analysis ?? 'not_started'].toLowerCase()}</Badge>
         </div>
       )}
@@ -201,11 +206,12 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
           </Alert>
         </div>
       )}
+      {ready && mode === 'server' && <ExtractionPanel extraction={extraction} />}
       {ready && (
         <div className="sw-upload__alert">
-          <Alert tone="info" title="Analysis has not started">
+          <Alert tone="info" title={mode === 'server' ? 'Stored temporarily' : 'Analysis has not started'}>
             {mode === 'server'
-              ? 'Your video was uploaded to the SafeWatch server and is stored temporarily; it is deleted automatically. Safety analysis arrives in a later release.'
+              ? 'Your video was uploaded to the SafeWatch server and is deleted automatically. Safety analysis arrives in a later release.'
               : 'This file stays on your device. Safety analysis arrives in a later release.'}
           </Alert>
         </div>

@@ -1,11 +1,18 @@
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import type { MediaExtraction } from '@/domain/extraction/extraction';
+import { DEFAULT_FRAME_SAMPLING } from '@/domain/extraction/sampling';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { MediaResponse } from '@/domain/api/contract';
 import { normalizeMetadata } from '@/domain/media/metadata';
+import { execFileSync } from 'node:child_process';
 import { createApiServer } from '../src/api/server';
+import { MediaExtractionService } from '../src/application/extractionService';
+import type { MediaExtractor } from '../src/application/extractionPorts';
+import type { ExtractionLimits } from '../src/application/extractionTypes';
+import { FfmpegMediaExtractor } from '../src/infrastructure/ffmpeg/ffmpegMediaExtractor';
 import { MediaService } from '../src/application/mediaService';
 import type { Logger, ServerMediaProcessor } from '../src/application/ports';
 import { ProcessingQueue } from '../src/application/processingQueue';
@@ -27,6 +34,7 @@ export interface TestApp {
   storageDir: string;
   logs: Array<Record<string, unknown>>;
   service: MediaService;
+  extraction?: MediaExtractionService;
   repository: InMemoryMediaRepository;
   storage: LocalDiskMediaStorage;
   clock: { now: number };
@@ -44,7 +52,19 @@ export interface TestAppOptions {
   retentionMs?: number;
   allowedOrigins?: string[];
   toolsStatus?: { ffmpeg: boolean; ffprobe: boolean };
+  /** Enables extraction after media is ready. Omit to test media handling alone. */
+  extraction?: { extractor?: MediaExtractor; limits?: Partial<ExtractionLimits>; maxConcurrent?: number; maxQueued?: number };
 }
+
+export const defaultExtractionLimits = (): ExtractionLimits => ({
+  timeoutMs: 30_000,
+  frame: { ...DEFAULT_FRAME_SAMPLING },
+  maxFrameBytes: 64 * 1024 * 1024,
+  maxAudioBytes: 512 * 1024 * 1024,
+  maxAudioTracks: 8,
+  maxCues: 50_000,
+  maxSubtitleBytes: 8 * 1024 * 1024,
+});
 
 export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> {
   const storageDir = await mkdtemp(join(tmpdir(), 'sw-test-'));
@@ -64,8 +84,16 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
     processingTimeoutMs: opts.processingTimeoutMs ?? 10_000,
     retentionMs: opts.retentionMs ?? 60 * 60_000,
   };
+  const extraction = opts.extraction
+    ? new MediaExtractionService({
+        storage, repository, logger, now: () => clock.now,
+        extractor: opts.extraction.extractor ?? new FfmpegMediaExtractor({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' }),
+        queue: new ProcessingQueue(opts.extraction.maxConcurrent ?? 1, opts.extraction.maxQueued ?? 10),
+        limits: { ...defaultExtractionLimits(), ...opts.extraction.limits },
+      })
+    : undefined;
   const service = new MediaService({
-    storage, repository, logger, limits,
+    storage, repository, logger, limits, extraction,
     processor: opts.processor ?? fakeProcessor(),
     queue: new ProcessingQueue(opts.maxConcurrentProcessing ?? 2, opts.maxQueuedProcessing ?? 10),
     now: () => clock.now,
@@ -78,7 +106,7 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    url, storageDir, logs, service, repository, storage, clock,
+    url, storageDir, logs, service, extraction, repository, storage, clock,
     files: async () => (await readdir(storageDir)).filter((f) => f !== '.safewatch-storage'),
     close: async () => {
       server.closeAllConnections();
@@ -113,4 +141,25 @@ export async function eventually(predicate: () => Promise<boolean> | boolean, ti
     if (Date.now() > end) throw new Error('condition not met in time');
     await new Promise((r) => setTimeout(r, 25));
   }
+}
+
+export async function waitForExtraction(app: TestApp, id: string, timeoutMs = 20_000): Promise<MediaExtraction> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await fetch(`${app.url}/api/media/${id}/extraction`);
+    const { extraction } = (await res.json()) as { extraction: MediaExtraction };
+    if (extraction.status === 'completed' || extraction.status === 'failed') return extraction;
+    if (Date.now() > end) throw new Error(`timed out waiting for extraction; last=${extraction.status}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** Generates a small synthetic video with FFmpeg into `file` (tests only; never committed). */
+export function generateVideo(file: string, o: { width: number; height: number; seconds: number; fps?: number; audio?: boolean }) {
+  const args = ['-v', 'error', '-y', '-f', 'lavfi', '-i', `testsrc2=size=${o.width}x${o.height}:rate=${o.fps ?? 10}`];
+  if (o.audio) args.push('-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100');
+  args.push('-t', String(o.seconds), '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '10', '-b:v', '200k', '-pix_fmt', 'yuv420p');
+  if (o.audio) args.push('-c:a', 'aac', '-b:a', '24k');
+  args.push(file);
+  execFileSync('ffmpeg', args, { stdio: 'ignore' });
 }

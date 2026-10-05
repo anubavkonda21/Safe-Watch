@@ -3,16 +3,20 @@ import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { StorageError, type LocalMediaFile, type MediaStorage } from '../../application/ports';
+import { StorageError, type ExtractionWorkspace, type LocalMediaFile, type MediaStorage } from '../../application/ports';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** The only file names this storage will ever create, list or delete. */
-const OWNED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(media|part)$/;
+const OWNED = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(media|part|extraction)$/;
+/** The only artifact names that can exist: server-generated, two fixed folders. */
+const ARTIFACT = /^(audio|frames)\/[a-z0-9-]{1,40}\.(wav|jpg)$/;
 const MARKER = '.safewatch-storage';
 
 /**
  * Local-disk adapter. Files are named `<uuid>.media` (complete) or
- * `<uuid>.part` (upload in progress). Uploads are written to `.part` and
+ * `<uuid>.part` (upload in progress); derived assets live in the directory
+ * `<uuid>.extraction/` (`audio/`, `frames/`), so deleting a media item removes
+ * everything derived from it. Uploads are written to `.part` and
  * renamed only when complete, so a crash can never leave a half-written file
  * that looks finished. Directory 0700, files 0600.
  *
@@ -43,7 +47,7 @@ export class LocalDiskMediaStorage implements MediaStorage {
     return this.ready;
   }
 
-  private pathFor(id: string, ext: 'media' | 'part'): string {
+  private pathFor(id: string, ext: 'media' | 'part' | 'extraction'): string {
     if (!ID.test(id)) throw new StorageError('failed', 'Invalid media id');
     const p = resolve(this.root, `${id}.${ext}`);
     if (!p.startsWith(this.root + sep)) throw new StorageError('failed', 'Invalid media path');
@@ -89,10 +93,40 @@ export class LocalDiskMediaStorage implements MediaStorage {
     return fn({ path: this.pathFor(id, 'media') });
   }
 
+  async withExtractionDir<T>(id: string, fn: (workspace: ExtractionWorkspace) => Promise<T>): Promise<T> {
+    await this.init();
+    const dir = this.pathFor(id, 'extraction');
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    return fn({ dir });
+  }
+
+  private artifactPath(id: string, artifact: string): string {
+    if (!ARTIFACT.test(artifact)) throw new StorageError('failed', 'Invalid artifact name');
+    const dir = this.pathFor(id, 'extraction');
+    const p = resolve(dir, artifact);
+    if (!p.startsWith(dir + sep)) throw new StorageError('failed', 'Invalid artifact path');
+    return p;
+  }
+
+  readArtifact(id: string, artifact: string): AsyncIterable<Uint8Array> {
+    return createReadStream(this.artifactPath(id, artifact));
+  }
+
+  async deleteArtifact(id: string, artifact: string): Promise<void> {
+    await this.init();
+    await rm(this.artifactPath(id, artifact), { force: true });
+  }
+
+  async deleteExtraction(id: string): Promise<void> {
+    await this.init();
+    await rm(this.pathFor(id, 'extraction'), { recursive: true, force: true });
+  }
+
   async delete(id: string): Promise<void> {
     await this.init();
     await rm(this.pathFor(id, 'media'), { force: true });
     await rm(this.pathFor(id, 'part'), { force: true });
+    await this.deleteExtraction(id);
   }
 
   async cleanup({ olderThanMs }: { olderThanMs: number }) {
@@ -113,7 +147,7 @@ export class LocalDiskMediaStorage implements MediaStorage {
       const file = join(this.root, name);
       try {
         if (!predicate(await stat(file))) continue;
-        await rm(file, { force: true });
+        await rm(file, { recursive: true, force: true });
         removed += 1;
       } catch {
         // Leave it for the next sweep.

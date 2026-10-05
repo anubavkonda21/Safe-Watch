@@ -14,3 +14,11 @@ export function formatDuration(totalSeconds: number): string {
   const sec = String(s % 60).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
+
+/** Compact elapsed time: "85 ms", "1.2 s", "2 min 5 s". */
+export function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${Number(s.toFixed(1))} s`;
+  return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
+}

@@ -15,7 +15,8 @@
     "dev:server": "tsx watch server/src/main.ts",
     "build:server": "vite build --ssr server/src/main.ts --outDir dist-server",
     "start": "node dist-server/main.js",
-    "check:large": "tsx scripts/large-upload-check.ts"
+    "check:large": "tsx scripts/large-upload-check.ts",
+    "check:extraction": "tsx scripts/extraction-check.ts"
   },
   "dependencies": {
     "react": "^19.3.0",

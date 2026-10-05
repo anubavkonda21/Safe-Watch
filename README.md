@@ -6,7 +6,7 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
-**Checkpoint 2 — server media foundation.** The interface, a Node API, secure upload, temporary storage and FFprobe/FFmpeg processing exist. There is **no analysis and no AI**: a video can be `Media: ready` while `Analysis: not started`.
+**Checkpoint 3 — media extraction pipeline.** The interface, a Node API, secure upload, temporary storage, FFprobe/FFmpeg processing and deterministic extraction of audio, subtitles and frames exist. There is **no analysis and no AI** (no speech-to-text, no detection, no scoring): a video can be `Media: ready`, `Extraction: completed` and `Analysis: not started` at the same time.
 
 | Capability | Status |
 | --- | --- |
@@ -19,11 +19,16 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Temporary disk storage with lifecycle and cleanup | IMPLEMENTED |
 | FFprobe metadata + FFmpeg decode check | IMPLEMENTED |
 | Real upload progress in the UI | IMPLEMENTED |
-| Audio / subtitle / frame extraction | PLANNED |
+| Audio extraction (16 kHz mono WAV, every track) | IMPLEMENTED |
+| Subtitle detection + text extraction to timestamped cues (image subtitles reported as unsupported) | IMPLEMENTED |
+| Deterministic, capped frame sampling (JPEG) | IMPLEMENTED |
+| Extraction manifest API, phase-based progress, extraction UI | IMPLEMENTED |
+| OCR of image subtitles | NOT IMPLEMENTED |
+| Scene detection | NOT IMPLEMENTED |
 | Persistent database, authentication, background workers | PLANNED |
 | Responsive layout, accessibility foundation | IMPLEMENTED |
 | Tests, lint, typecheck, build | IMPLEMENTED |
-| Speech-to-text, subtitle analysis | PLANNED |
+| Speech-to-text, subtitle analysis (any AI) | PLANNED (not implemented) |
 | Profanity / custom phrase detection | PLANNED |
 | Visual detection (violence, graphic, drugs, sexual content) | PLANNED |
 | Contextual analysis, risk score, timeline | PLANNED |
@@ -101,6 +106,28 @@ Errors are `{error:{code, message, requestId}}` with codes `INVALID_FILE`, `UNSU
 
 Upload → `<uuid>.part` on disk → renamed to `<uuid>.media` when complete (`uploaded`) → queued/`processing` (FFprobe + decode check) → `ready` (file kept) or `failed` (file deleted immediately). Ready media is deleted when the user replaces it (`DELETE`), or automatically after `SAFEWATCH_RETENTION_MINUTES` (default 60). Orphaned files are swept by age; the whole storage directory is purged at startup and shutdown. See `SAFEWATCH_MEDIA_ARCHITECTURE.md` for the production FFmpeg strategy.
 
+## Extraction pipeline (Checkpoint 3)
+
+```
+MediaAsset (ready)
+   │  queued on a bounded in-process queue (default: 1 extraction at a time)
+   ▼
+MediaExtractionService ── policy: selection, dedupe, caps, limits, cleanup
+   ├─► audio     16 kHz mono PCM WAV per audio track           → AudioAsset[]
+   ├─► subtitles text tracks → timestamped cues; image tracks listed as unsupported → SubtitleTrack[]
+   └─► frames    equal-interval, mid-interval JPEGs, capped     → FrameSet
+   ▼
+MediaExtraction manifest (validated, serialisable, no paths, no tool output)
+```
+
+Three independent statuses: **Media** (`uploaded → processing → ready`), **Extraction** (`not_started → queued → processing → completed | failed`, with phases `preparing → extracting-audio → extracting-subtitles → sampling-frames → finalizing`) and **Analysis** (`not_started`, nothing implements it yet). Extraction failure never turns ready media into failed media.
+
+Defaults (all configurable, see `.env.example`): one frame per 10 s capped at 300 frames, fitted inside 768×768 as JPEG, 64 MB total frames, 512 MB total audio, 8 audio tracks, 50,000 cues per subtitle track, 10-minute job timeout. Everything extracted shares the original's 60-minute retention and is deleted with it.
+
+API: `GET /api/media/:id/extraction` returns the manifest; `GET /api/media/:id` includes `extraction: {status, phase}`. Details, formats and the reasoning are in `SAFEWATCH_MEDIA_ARCHITECTURE.md` §18–§24. AI models are **not** implemented: future analysis will consume `AudioAsset`, `SubtitleCue` and `Frame` values only.
+
+Measure it yourself: `npm run check:extraction -- /path/to/video.mkv`.
+
 ## Technology stack
 
 - **Vite + React 19 + TypeScript (strict)** — SPA with fast tooling.
@@ -126,6 +153,7 @@ npm run dev
 | `npm run dev:server` | API dev server at http://127.0.0.1:8787 (restarts on change) |
 | `npm run build:server` / `npm start` | Bundle and run the API (`dist-server/`) |
 | `npm run check:large -- <file>` | Manual large-file streaming/memory check |
+| `npm run check:extraction -- <file...>` | Manual extraction timing, size, memory and cleanup check |
 | `npm run build` | Typecheck and production build to `dist/` |
 | `npm run preview` | Serve the production build |
 | `npm test` | Run tests once (`test:watch` for watch mode) |

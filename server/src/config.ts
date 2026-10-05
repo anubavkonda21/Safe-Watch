@@ -1,6 +1,23 @@
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+/** Everything that bounds extraction work. See SAFEWATCH_MEDIA_ARCHITECTURE.md for the reasoning behind the defaults. */
+export interface ExtractionConfig {
+  /** Wall-clock limit for one whole extraction job. */
+  timeoutMs: number;
+  maxConcurrent: number;
+  maxQueued: number;
+  frame: { intervalSeconds: number; maxFrames: number; maxWidth: number; maxHeight: number };
+  /** Maximum total bytes of all sampled frames for one media item. */
+  maxFrameBytes: number;
+  /** Maximum total bytes of all extracted audio of one media item (WAV, 16 kHz mono ≈ 115 MB per hour per track). */
+  maxAudioBytes: number;
+  maxAudioTracks: number;
+  /** Per subtitle track. */
+  maxCues: number;
+  maxSubtitleBytes: number;
+}
+
 export interface ServerConfig {
   environment: 'development' | 'production' | 'test';
   host: string;
@@ -20,6 +37,7 @@ export interface ServerConfig {
   sweepIntervalMs: number;
   ffmpegPath: string;
   ffprobePath: string;
+  extraction: ExtractionConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 }
 
@@ -71,6 +89,22 @@ export function parseServerConfig(env: Env): ServerConfig {
     maxQueuedProcessing: int(env, 'SAFEWATCH_MAX_QUEUED_PROCESSING', 20, 0, 1000),
     retentionMs: int(env, 'SAFEWATCH_RETENTION_MINUTES', 60, 1, 7 * 24 * 60) * MIN,
     sweepIntervalMs: int(env, 'SAFEWATCH_SWEEP_INTERVAL_SECONDS', 60, 1, 3600) * 1000,
+    extraction: {
+      timeoutMs: int(env, 'SAFEWATCH_EXTRACTION_TIMEOUT_MS', 10 * MIN, 1000, 6 * 60 * MIN),
+      maxConcurrent: int(env, 'SAFEWATCH_MAX_CONCURRENT_EXTRACTION', 1, 1, 8),
+      maxQueued: int(env, 'SAFEWATCH_MAX_QUEUED_EXTRACTION', 20, 0, 1000),
+      frame: {
+        intervalSeconds: int(env, 'SAFEWATCH_FRAME_INTERVAL_SECONDS', 10, 1, 3600),
+        maxFrames: int(env, 'SAFEWATCH_FRAME_MAX_COUNT', 300, 1, 2000),
+        maxWidth: int(env, 'SAFEWATCH_FRAME_MAX_WIDTH', 768, 64, 3840),
+        maxHeight: int(env, 'SAFEWATCH_FRAME_MAX_HEIGHT', 768, 64, 2160),
+      },
+      maxFrameBytes: int(env, 'SAFEWATCH_FRAME_MAX_TOTAL_MB', 64, 1, 4096) * 1024 * 1024,
+      maxAudioBytes: int(env, 'SAFEWATCH_AUDIO_MAX_MB', 512, 1, 4096) * 1024 * 1024,
+      maxAudioTracks: int(env, 'SAFEWATCH_AUDIO_MAX_TRACKS', 8, 1, 32),
+      maxCues: int(env, 'SAFEWATCH_SUBTITLE_MAX_CUES', 50_000, 1, 500_000),
+      maxSubtitleBytes: int(env, 'SAFEWATCH_SUBTITLE_MAX_MB', 8, 1, 256) * 1024 * 1024,
+    },
     ffmpegPath: env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg',
     ffprobePath: env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe',
     logLevel: oneOf(env, 'SAFEWATCH_LOG_LEVEL', ['debug', 'info', 'warn', 'error', 'silent'] as const, 'info'),

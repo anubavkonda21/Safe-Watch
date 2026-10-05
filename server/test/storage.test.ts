@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -6,8 +6,9 @@ import { StorageError } from '../src/application/ports';
 import { LocalDiskMediaStorage } from '../src/infrastructure/storage/localDiskMediaStorage';
 
 let dir: string;
+let root: string;
 let storage: LocalDiskMediaStorage;
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'sw-storage-')); storage = new LocalDiskMediaStorage(dir); });
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'sw-storage-')); root = dir; storage = new LocalDiskMediaStorage(dir); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 async function* chunks(...parts: string[]) { for (const p of parts) yield Buffer.from(p); }
@@ -103,5 +104,42 @@ describe('LocalDiskMediaStorage', () => {
     await expect(s.purge()).rejects.toBeInstanceOf(StorageError);
     expect(await readdir(foreign)).toEqual(['important.doc']);
     await rm(foreign, { recursive: true, force: true });
+  });
+
+  it('provides a private extraction directory per media and removes it with the media', async () => {
+    const id = randomUUID();
+    await storage.save(id, chunks('video'), { maxBytes: 100 });
+    const dir = await storage.withExtractionDir(id, async (ws) => {
+      await writeFile(join(ws.dir, 'x.txt'), 'derived');
+      return ws.dir;
+    });
+    expect(dir).toBe(join(root, `${id}.extraction`));
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    await storage.delete(id);
+    expect(await names()).toEqual([]);
+  });
+  it('only reads and deletes artifacts with server-generated names', async () => {
+    const id = randomUUID();
+    await storage.withExtractionDir(id, async (ws) => {
+      await mkdir(join(ws.dir, 'frames'), { recursive: true });
+      await writeFile(join(ws.dir, 'frames', 'frm-00000.jpg'), 'jpegbytes');
+    });
+    expect(await readAll(storage.readArtifact(id, 'frames/frm-00000.jpg'))).toBe('jpegbytes');
+    await storage.deleteArtifact(id, 'frames/frm-00000.jpg');
+    await expect(readAll(storage.readArtifact(id, 'frames/frm-00000.jpg'))).rejects.toThrow();
+    for (const bad of ['../evil.jpg', 'frames/../../evil.jpg', 'frames/a b.jpg', '/etc/passwd', 'x.jpg']) {
+      expect(() => storage.readArtifact(id, bad)).toThrow(StorageError);
+    }
+  });
+  it('purge and age-based cleanup also remove extraction directories', async () => {
+    const a = randomUUID(), b = randomUUID();
+    await storage.withExtractionDir(a, async (ws) => writeFile(join(ws.dir, 'f'), 'x'));
+    await storage.withExtractionDir(b, async (ws) => writeFile(join(ws.dir, 'f'), 'x'));
+    const old = new Date(Date.now() - 2 * 3600_000);
+    await utimes(join(root, `${a}.extraction`), old, old);
+    expect(await storage.cleanup({ olderThanMs: 3600_000 })).toEqual({ removed: 1 });
+    expect(await names()).toEqual([`${b}.extraction`]);
+    expect(await storage.purge()).toEqual({ removed: 1 });
+    expect(await names()).toEqual([]);
   });
 });

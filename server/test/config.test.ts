@@ -22,4 +22,17 @@ describe('parseServerConfig', () => {
     expect(() => parseServerConfig({ SAFEWATCH_ALLOWED_ORIGINS: 'not a url' })).toThrow(/not a URL/);
     expect(parseServerConfig({ SAFEWATCH_ALLOWED_ORIGINS: 'https://app.example.com, http://localhost:3000' }).allowedOrigins).toEqual(['https://app.example.com', 'http://localhost:3000']);
   });
+  it('has bounded extraction defaults', () => {
+    expect(parseServerConfig({}).extraction).toEqual({
+      timeoutMs: 600_000, maxConcurrent: 1, maxQueued: 20,
+      frame: { intervalSeconds: 10, maxFrames: 300, maxWidth: 768, maxHeight: 768 },
+      maxFrameBytes: 64 * 1024 * 1024, maxAudioBytes: 512 * 1024 * 1024, maxAudioTracks: 8, maxCues: 50_000, maxSubtitleBytes: 8 * 1024 * 1024,
+    });
+  });
+  it('reads extraction overrides and rejects unbounded or invalid ones', () => {
+    expect(parseServerConfig({ SAFEWATCH_FRAME_MAX_COUNT: '50', SAFEWATCH_MAX_CONCURRENT_EXTRACTION: '2' }).extraction).toMatchObject({ maxConcurrent: 2, frame: { maxFrames: 50 } });
+    for (const [k, v] of [['SAFEWATCH_FRAME_MAX_COUNT', '0'], ['SAFEWATCH_FRAME_MAX_COUNT', '5000'], ['SAFEWATCH_FRAME_INTERVAL_SECONDS', '0'], ['SAFEWATCH_MAX_CONCURRENT_EXTRACTION', '99'], ['SAFEWATCH_AUDIO_MAX_MB', '-1'], ['SAFEWATCH_FRAME_MAX_WIDTH', '10']]) {
+      expect(() => parseServerConfig({ [k as string]: v as string })).toThrow(new RegExp(k as string));
+    }
+  });
 });

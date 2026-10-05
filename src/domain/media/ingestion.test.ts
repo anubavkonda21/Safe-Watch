@@ -1,5 +1,6 @@
 import type { MediaAsset } from './asset';
 import { PENDING_METADATA } from './asset';
+import { createExtraction } from '../extraction/extraction';
 import { MediaIngestionError } from './errors';
 import { initialIngestionState, ingestionReducer, isBusy, type IngestionEvent, type IngestionState } from './ingestion';
 
@@ -49,6 +50,19 @@ describe('ingestionReducer', () => {
   it('ready carries analysis status separately: NOT started by default', () => {
     const s = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }]);
     expect(s).toMatchObject({ status: 'ready', analysis: 'not_started', asset: { status: 'ready' } });
+  });
+  it('ready starts with no extraction; extraction updates attach to the ready asset only', () => {
+    const ready = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }]);
+    expect(ready).toMatchObject({ status: 'ready', extraction: null });
+    const ex = { ...createExtraction('a1', 'now'), status: 'processing' as const, phase: 'extracting-audio' as const };
+    expect(run([{ type: 'extraction', extraction: ex }], ready)).toMatchObject({ status: 'ready', extraction: { status: 'processing' } });
+    expect(run([{ type: 'extraction', extraction: { ...ex, mediaId: 'someone-else' } }], ready)).toBe(ready);
+    expect(run([{ type: 'extraction', extraction: ex }])).toBe(initialIngestionState);
+  });
+  it('a new selection discards the previous extraction', () => {
+    const ex = { ...createExtraction('a1', 'now'), status: 'completed' as const };
+    const done = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }, { type: 'extraction', extraction: ex }]);
+    expect(run([{ type: 'select', fileName: 'y' }], done)).toEqual({ status: 'validating', fileName: 'y' });
   });
   it('processing → failed; unknown errors become processing-failed', () => {
     const s = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'fail', error: new Error('boom: /internal/path') }]);

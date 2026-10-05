@@ -7,6 +7,8 @@ import type { MediaUploader } from './mediaUploader';
 import type { MediaProcessor } from './mediaProcessor';
 
 const MB = 1024 * 1024;
+/** Extraction that never reports: keeps these tests about upload behaviour only. */
+const neverSettles = () => new Promise<never>(() => undefined);
 const okProcessor: MediaProcessor = {
   extractMetadata: async () => normalizeMetadata({ durationSeconds: 60, width: 1280, height: 720 }, 'browser'),
 };
@@ -90,15 +92,15 @@ describe('createMediaIngestion with a server uploader', () => {
   const make = (uploader: MediaUploader) => createMediaIngestion({ uploader, maxBytes: 10 * MB });
 
   it('reports server mode and still validates on the client first', async () => {
-    const uploader: MediaUploader = { upload: vi.fn(), remove: vi.fn() };
+    const uploader: MediaUploader = { upload: vi.fn(), waitForExtraction: neverSettles, remove: vi.fn() };
     const ingestion = make(uploader);
     expect(ingestion.mode).toBe('server');
     await expect(ingestion.accept(makeFile('a.txt', HEADERS.mp4))).rejects.toMatchObject({ code: 'unsupported-type' });
     expect(uploader.upload).not.toHaveBeenCalled();
   });
   it('uploads, forwards progress, and returns the server asset and analysis status', async () => {
-    const upload = vi.fn(async (_f: File, h?: { onProgress?: (n: number) => void }) => { h?.onProgress?.(0.5); return { asset: remoteAsset(), analysis: { status: 'not_started' as const } }; });
-    const ingestion = make({ upload, remove: vi.fn() });
+    const upload = vi.fn(async (_f: File, h?: { onProgress?: (n: number) => void }) => { h?.onProgress?.(0.5); return { asset: remoteAsset(), analysis: { status: 'not_started' as const }, extraction: { status: 'queued' as const, phase: null } }; });
+    const ingestion = make({ upload, waitForExtraction: neverSettles, remove: vi.fn() });
     const file = makeFile('a.mp4', HEADERS.mp4);
     const onProgress = vi.fn();
     const prepared = await ingestion.prepare(file, await ingestion.accept(file), { onProgress });
@@ -107,20 +109,20 @@ describe('createMediaIngestion with a server uploader', () => {
   });
   it('turns a server-side failed asset into a typed error', async () => {
     const failed = remoteAsset({ status: 'failed', failure: { code: 'invalid-media' } });
-    const ingestion = make({ upload: async () => ({ asset: failed, analysis: { status: 'not_started' } }), remove: vi.fn() });
+    const ingestion = make({ upload: async () => ({ asset: failed, analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } }), waitForExtraction: neverSettles, remove: vi.fn() });
     const file = makeFile('a.mp4', HEADERS.mp4);
     await expect(ingestion.prepare(file, await ingestion.accept(file))).rejects.toMatchObject({ code: 'invalid-media' });
   });
   it('preserves typed upload errors and maps unknown ones', async () => {
     const file = makeFile('a.mp4', HEADERS.mp4);
-    const busy = make({ upload: async () => { throw new MediaIngestionError('server-busy'); }, remove: vi.fn() });
+    const busy = make({ upload: async () => { throw new MediaIngestionError('server-busy'); }, waitForExtraction: neverSettles, remove: vi.fn() });
     await expect(busy.prepare(file, await busy.accept(file))).rejects.toMatchObject({ code: 'server-busy' });
-    const weird = make({ upload: async () => { throw new TypeError('boom'); }, remove: vi.fn() });
+    const weird = make({ upload: async () => { throw new TypeError('boom'); }, waitForExtraction: neverSettles, remove: vi.fn() });
     await expect(weird.prepare(file, await weird.accept(file))).rejects.toMatchObject({ code: 'processing-failed' });
   });
   it('removes server data through the uploader', async () => {
     const remove = vi.fn(async () => undefined);
-    await make({ upload: vi.fn(), remove }).remove(remoteAsset());
+    await make({ upload: vi.fn(), waitForExtraction: neverSettles, remove }).remove(remoteAsset());
     expect(remove).toHaveBeenCalledWith('server-id');
   });
 });

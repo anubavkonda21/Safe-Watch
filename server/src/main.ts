@@ -1,7 +1,9 @@
 import { parseServerConfig } from './config';
+import { MediaExtractionService } from './application/extractionService';
 import { MediaService } from './application/mediaService';
 import { ProcessingQueue } from './application/processingQueue';
 import { createApiServer } from './api/server';
+import { FfmpegMediaExtractor } from './infrastructure/ffmpeg/ffmpegMediaExtractor';
 import { FfmpegMediaProcessor } from './infrastructure/ffmpeg/ffmpegMediaProcessor';
 import { InMemoryMediaRepository } from './infrastructure/inMemoryMediaRepository';
 import { createJsonLogger } from './infrastructure/jsonLogger';
@@ -23,11 +25,22 @@ if (!tools.ffmpeg || !tools.ffprobe) {
 
 const version = process.env.npm_package_version ?? 'unknown'; // set by npm when started through an npm script
 const storage = new LocalDiskMediaStorage(config.storageDir);
+const repository = new InMemoryMediaRepository();
+const { extraction: ex } = config;
+const extraction = new MediaExtractionService({
+  storage,
+  repository,
+  extractor: new FfmpegMediaExtractor(config),
+  queue: new ProcessingQueue(ex.maxConcurrent, ex.maxQueued),
+  logger,
+  limits: { timeoutMs: ex.timeoutMs, frame: ex.frame, maxFrameBytes: ex.maxFrameBytes, maxAudioBytes: ex.maxAudioBytes, maxAudioTracks: ex.maxAudioTracks, maxCues: ex.maxCues, maxSubtitleBytes: ex.maxSubtitleBytes },
+});
 const mediaService = new MediaService({
   storage,
-  repository: new InMemoryMediaRepository(),
+  repository,
   processor: new FfmpegMediaProcessor(config),
   queue: new ProcessingQueue(config.maxConcurrentProcessing, config.maxQueuedProcessing),
+  extraction,
   logger,
   limits: config,
 });

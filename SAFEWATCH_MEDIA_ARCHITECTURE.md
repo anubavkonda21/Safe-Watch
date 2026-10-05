@@ -201,3 +201,106 @@ Move to a **Docker image with a locked-down runtime** (non-root, read-only root 
 - `-protocol_whitelist file` and a **forced demuxer** (`-f mov|matroska|avi`) chosen from the already-verified container: FFmpeg will not auto-detect HLS/concat/other demuxers that could read other files or URLs from inside an upload.
 - stdin closed (`-nostdin`, `stdio: 'ignore'`), minimal environment (`PATH` only), stdout capped (4 MB), stderr drained and discarded (never logged or returned), `SIGKILL` on timeout.
 - Output is parsed defensively; raw FFprobe JSON never crosses the API.
+
+---
+
+## 18. Extraction architecture (Checkpoint 3)
+
+```
+ MediaService (media ready)                             ┌─ shared pure domain (src/domain/extraction) ─────────────┐
+        │ schedule(mediaId)                              │ MediaExtraction · AudioAsset · SubtitleTrack/Cue · Frame │
+        ▼                                                │ lifecycle · cue normalisation · frame planner · validator│
+ ProcessingQueue (extraction, default 1 job)             └──────────────────────────────────────────────────────────┘
+        ▼
+ MediaExtractionService  ── policy (selection, dedupe, limits, cleanup) ──►  MediaExtractor (port)
+        │                                                                         ▲ implements
+        ▼                                                                  FfmpegMediaExtractor ──► ffprobe / ffmpeg
+ MediaStorage.withExtractionDir(id)   <uuid>.extraction/{audio,frames}/
+```
+
+- **Ports.** `MediaExtractor` offers four single operations (`inspect`, `extractAudio`, `extractSubtitleCues`, `sampleFrame`). The *application* decides what to extract and enforces policy; the *adapter* only knows how. Results are normalised values: no FFprobe JSON, command lines, stderr or paths cross the boundary.
+- **Storage.** The application never sees a path. `MediaStorage.withExtractionDir` hands a workspace to the adapter inside a callback; assets are addressed by logical artifact names (`audio/aud-0.wav`, `frames/frm-00001.jpg`), validated against a strict pattern. `delete(id)` removes the original **and** the whole extraction directory.
+- **Lifecycle.** Extraction is its own state machine (`not_started → queued → processing → completed | failed`) with phase-based progress (`preparing`, `extracting-audio`, `extracting-subtitles`, `sampling-frames`, `finalizing`). It is independent of media status and analysis status. If extraction fails, media stays `ready`.
+- **Failure model.** Fatal issues (limits, timeout, unreadable media, invalid manifest) fail the extraction and delete every partial output. Non-fatal issues (one unreadable subtitle track, a frame with no picture, tracks beyond the track cap) complete the extraction with `errors[]` warnings: nothing is dropped silently.
+
+## 19. Audio extraction
+
+**Format decision: 16 kHz, mono, 16-bit PCM in WAV (`pcm_s16le`).**
+
+| Option | For | Against |
+| --- | --- | --- |
+| **WAV PCM 16 kHz mono (chosen)** | Exactly what speech-to-text engines (Whisper and most others) consume; every tool reads it; no codec dependency; byte-deterministic with `-fflags +bitexact`; trivial to slice by time (bytes = 32,000 per second) | Large: about 115 MB per hour per track (can exceed the source file size) |
+| FLAC | Lossless, about half the size | Needs a decoder step before use; more complex to slice |
+| Opus/AAC | Tiny | Lossy; extra decode; non-deterministic across encoder versions; may reduce recognition accuracy |
+| Original codec copy | Zero cost | Not uniform; consumers would need FFmpeg again |
+
+Policy: **every** audio stream is extracted, in container order, up to `SAFEWATCH_AUDIO_MAX_TRACKS` (8); streams beyond the cap are reported as warnings, never dropped silently. Stream index, language, title, dispositions (default/forced/original/hearing-impaired/commentary) and source codec/sample rate/channels/bit rate are preserved. Multi-channel audio is down-mixed to mono. A stream whose decoded audio is **bit-identical** to an earlier one (SHA-256) is recorded with `duplicateOf` and its file is not stored twice. Zero audio tracks is valid (`audio: []`). Total audio output is bounded by one budget (`SAFEWATCH_AUDIO_MAX_MB`, default 512 MB) shared by all tracks: the expected size is checked before decoding, and the adapter enforces the remaining budget on the actual output (`-fs`). Audio-only files are **not supported**: ingestion rejects media without a video stream (`MEDIA_METADATA_FAILED`).
+
+## 20. Subtitles
+
+- **Detection** (FFprobe): index, language (ISO tag, `und` → null), title, codec, dispositions. Classification by codec: **text** (subrip, ass/ssa, webvtt, mov_text, and similar), **image** (hdmv_pgs_subtitle, dvd_subtitle, dvb_subtitle, xsub) or **unknown** (anything else, never assumed to be text).
+- **Text extraction**: FFmpeg converts the stream to SubRip on stdout (capped at `SAFEWATCH_SUBTITLE_MAX_MB`); the pure `parseSrt` reads timing at millisecond precision; `normalizeCues` cleans the text.
+- **Normalisation (documented transformations)**: formatting tags removed (`<i> <b> <u> <font…> <c> <v> <span>…` and ASS `{\an8}`/`{\i1}` overrides); literal ASS `\N` becomes a line break; the basic entities (`&amp; &lt; &gt; &quot; &nbsp;`) decoded; control, zero-width and bidirectional-override characters removed; each line trimmed and runs of spaces collapsed; blank lines dropped; text capped at 4,000 characters; empty cues, cues with invalid timing and exact duplicates (same start, end and text) dropped; cues ordered by start time. Words, punctuation, casing and timing are otherwise preserved. Non-formatting angle-bracket text such as `<laughs>` is kept. Output is **plain text** and is rendered as text by the UI.
+- **Image subtitles**: listed with `kind: "image"`, `textExtraction: "unsupported"` and no cues. No OCR is performed. Unknown codecs are listed as `unsupported` the same way.
+- A single track that cannot be read becomes `textExtraction: "failed"` plus a warning; it does not fail the whole extraction. Cue limit per track: 50,000.
+- ASS styling, positioning and karaoke effects are not preserved (FFmpeg's SubRip conversion discards most of them).
+
+## 21. Frame sampling
+
+**Algorithm (pure, `planFrameTimestamps`).** `count = min(maxFrames, ceil(duration / interval))`, then the video is divided into `count` **equal** intervals and one frame is sampled at the **middle** of each: `t_i = (i + 0.5) × duration / count`, rounded to milliseconds. Mid-interval sampling avoids the usually black first frame and end-of-file seeks; equal division guarantees every timestamp lies inside the media (a previous formulation sampled past the end of short videos and was caught by a unit test). If `duration / interval` exceeds `maxFrames` the step grows so samples still span the whole video (a 3-hour video at 1 frame/s still yields at most `maxFrames`). The requested and effective intervals are both recorded. Unknown duration: only the first moment is sampled, with a `duration-unknown` warning.
+
+**Method decision: one fast input-seek per frame** (`ffmpeg -ss T -i … -frames:v 1`), run sequentially.
+
+| Method | Correctness / determinism | Cost |
+| --- | --- | --- |
+| **Per-timestamp seek (chosen)** | Exact requested times; independent frames; easy to cap and to clean up | N process launches; each decodes from the previous keyframe |
+| Sequential decode with an `fps` filter | Timestamps follow decoder pts rounding | Decodes the **whole** video (minutes for long 4K/HEVC) |
+| Keyframe-only (`-skip_frame nokey`) | Irregular spacing; not reproducible across encoders | Fast, but not controllable |
+| Hybrid (seek + short decode window) | Same as chosen | More code for no measured need |
+
+Measured (see the Checkpoint 3 report): 300 frames from a 1-hour 720p video in about 15 s. Cost grows with frame count and keyframe distance; the job timeout bounds the worst case. Requested timestamps are recorded; the decoded frame is the first at or after the seek point (within one frame period).
+
+**Format decision: JPEG** (`-q:v 4`, `yuvj420p`).
+
+| Format | Size | Compatibility | CPU |
+| --- | --- | --- | --- |
+| **JPEG (chosen)** | Small (about 6.9 MB for 300 synthetic frames; real content 20–60 KB per 768-px frame) | Accepted by every vision API and library | Lowest |
+| WebP | Smaller | Not universal in model/tooling pipelines; slower encode | Higher |
+| PNG | 5–20× larger | Universal | Higher, lossless not needed for analysis |
+
+**Resolution.** Frames fit inside `maxWidth × maxHeight` (default 768×768), aspect ratio preserved, **never upscaled** (`scale='min(W,iw)':'min(H,ih)':force_original_aspect_ratio=decrease`). A 3840×2160 source yields 768×432 frames. Dimensions in the manifest are measured from the JPEG header, not assumed. Scene detection is **not** implemented; the sampler is isolated so a future `SceneDetector` can supply timestamps to the same plan.
+
+## 22. Limits, concurrency and retention
+
+| Limit | Default | Behaviour on breach |
+| --- | --- | --- |
+| Job timeout | 10 min | FFmpeg processes killed, extraction `failed: timeout`, partial output deleted |
+| Concurrent extractions | 1 (queue of 20) | Beyond the queue: `failed: server-busy`; media stays ready |
+| Frames per media | 300 | Planner caps the count (interval grows); never exceeded |
+| Frame bytes per media | 64 MB total | `failed: limit-exceeded`, cleanup |
+| Audio bytes per media | 512 MB total, 8 tracks | Estimated before decoding; enforced on output (`-fs`); `failed: limit-exceeded`, cleanup; extra tracks warned |
+| Subtitle cues / bytes | 50,000 / 8 MB per track | Track marked `failed` + warning |
+| Single FFmpeg step | 60 s | Aborted as `timeout` |
+
+Within a job FFmpeg processes run **one at a time**; the default of one concurrent job therefore means at most one FFmpeg process (verified: peak concurrent = 1). Disk worst case per media item is about original + 512 MB audio + 64 MB frames; with the 60-minute retention and 4 concurrent uploads this is still unbounded without a volume quota (Checkpoint 11).
+
+**Retention.** Original, extracted audio, subtitle data (inside the manifest, in memory) and frames share one clock: the original's 60 minutes (`SAFEWATCH_RETENTION_MINUTES`). `DELETE`, expiry, failure, timeout and startup/shutdown purge remove the original and `<id>.extraction/` together; an age-based sweep removes orphaned extraction directories. Running extractions are aborted before their media is deleted.
+
+## 23. API
+
+`GET /api/media/:id/extraction` → `{ extraction }` (`mediaId, status, phase, audio[], subtitles[], frames{config, effectiveIntervalSeconds, totalSizeBytes, frames[]}, createdAt, startedAt, completedAt, errors[], metrics{durationMs, stageMs, toolProcesses, outputBytes}`). 404 `NOT_FOUND` for unknown or malformed ids. `GET /api/media/:id` carries `extraction: {status, phase}` next to `asset` and `analysis`. No paths, no tool output, no raw FFprobe JSON. Artifact bytes are not served over HTTP yet; future server-side analysis reads them through `MediaStorage.readArtifact`.
+
+## 24. Future AI boundary
+
+```
+ EXTRACTION (deterministic, Checkpoint 3)  ──►  NORMALISED ASSETS  ──►  FUTURE AI ANALYSIS (NOT implemented)
+                                                 AudioAsset  (WAV 16 kHz mono, per track, language/title/dispositions)
+                                                 SubtitleCue (start, end, plain text, per track and language)
+                                                 Frame       (timestamp, size, JPEG artifact)
+```
+
+Future analysis code receives these values and reads artifact bytes through the storage port. It never needs FFmpeg commands, FFprobe JSON, subprocess objects or file paths. **No AI model is implemented in Checkpoint 3.**
+
+## 25. Security status (unchanged gate)
+
+All Checkpoint 2 controls apply to every extraction command (argv arrays, `shell: false`, minimal environment, closed stdin, `-protocol_whitelist file`, forced demuxer, timeouts, output caps, server-generated output names inside the job's directory with a path-escape guard, partial output removed on failure). Subtitle text and stream metadata are untrusted: sanitised, never logged, never interpreted as HTML. **FFmpeg isolation is still NOT COMPLETED** and remains a production security gate: there is still no OS sandbox, separate user, or memory/CPU cgroup. Measured example: decoding a 4K source made an FFmpeg child reach about 307 MB RSS with nothing limiting it.
