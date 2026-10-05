@@ -12,10 +12,11 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | --- | --- |
 | Landing page (nav, hero, capabilities, how it works) | IMPLEMENTED |
 | Design system tokens + foundational components | IMPLEMENTED |
-| Upload component (select/drop, validate, read local metadata) | IMPLEMENTED — local only, nothing is uploaded |
+| Media ingestion foundation: `MediaAsset` model, state machine, typed errors, `MediaProcessor` port | IMPLEMENTED |
+| Upload component (select/drop, content-sniff validation, local metadata) | IMPLEMENTED — local only, nothing is uploaded |
+| Server, FFmpeg/FFprobe, streamed upload, storage | PLANNED (Checkpoint 2) |
 | Responsive layout, accessibility foundation | IMPLEMENTED |
 | Tests, lint, typecheck, build | IMPLEMENTED |
-| Media ingestion (server, storage, FFmpeg) | PLANNED |
 | Speech-to-text, subtitle analysis | PLANNED |
 | Profanity / custom phrase detection | PLANNED |
 | Visual detection (violence, graphic, drugs, sexual content) | PLANNED |
@@ -40,6 +41,20 @@ Infrastructure infrastructure/   adapters: config, browser metadata reader
 ```
 
 See `CHECKPOINT_0A_REPORT.md` for the full diagram and rationale, and `SAFEWATCH_ROADMAP.md` for where each future service plugs in.
+
+## Media architecture
+
+Decision (see `SAFEWATCH_MEDIA_ARCHITECTURE.md`): a Vite SPA plus a **Node/TypeScript API that runs FFmpeg/FFprobe**, introduced in Checkpoint 2. Browser-only processing cannot extract subtitles/audio reliably and cannot hold AI keys; a separate media service or managed cloud is unjustified at this stage. Only the client-side contract exists today.
+
+```
+File → validate (extension + MIME + size + filename) → sniff first 64 bytes (must match extension)
+     → MediaAsset(accepted) → MediaProcessor.extractMetadata → MediaAsset(ready)
+```
+
+- `src/domain/media` — `MediaAsset`, `MediaMetadata`, ingestion state machine (`idle → validating → accepted → processing → ready | failed`), typed `MediaIngestionError` codes, validation, container detection.
+- `src/application` — `MediaProcessor` port and `createMediaIngestion` service.
+- `src/infrastructure` — `browserMediaProcessor` (duration/dimensions via `<video>`; unreadable metadata is reported as *unavailable*, never as an invalid file).
+- Large files are never loaded into memory: only the first 64 bytes are read, and metadata comes from a streamed object URL.
 
 ## Technology stack
 

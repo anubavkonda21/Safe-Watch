@@ -1,0 +1,80 @@
+import { PENDING_METADATA } from '@/domain/media/asset';
+import { normalizeMetadata } from '@/domain/media/metadata';
+import { HEADERS, makeFile } from '@/test/files';
+import { createMediaIngestion } from './mediaIngestion';
+import type { MediaProcessor } from './mediaProcessor';
+
+const MB = 1024 * 1024;
+const okProcessor: MediaProcessor = {
+  extractMetadata: async () => normalizeMetadata({ durationSeconds: 60, width: 1280, height: 720 }, 'browser'),
+};
+const make = (processor: MediaProcessor = okProcessor, maxBytes = 10 * MB) =>
+  createMediaIngestion({ processor, maxBytes, newId: () => 'id-1', now: () => new Date('2026-01-01T00:00:00Z') });
+
+// These tests use fake processors only: no browser, FFmpeg or filesystem involved.
+describe('createMediaIngestion.accept', () => {
+  it('creates an accepted asset from a valid file with detected type and sanitised name', async () => {
+    const asset = await make().accept(makeFile('../my;clip.mp4', HEADERS.mp4));
+    expect(asset).toEqual({
+      id: 'id-1', filename: 'my_clip.mp4', mimeType: 'video/mp4', container: 'mp4', typeLabel: 'MP4 video',
+      sizeBytes: HEADERS.mp4.length, status: 'accepted', metadata: PENDING_METADATA,
+      createdAt: '2026-01-01T00:00:00.000Z', failure: null,
+    });
+  });
+  it('accepts MKV reported with an empty MIME type', async () => {
+    const asset = await make().accept(makeFile('film.mkv', HEADERS.matroska, ''));
+    expect(asset.container).toBe('matroska');
+  });
+  it.each([
+    ['bad extension', makeFile('a.txt', HEADERS.mp4), 'unsupported-type'],
+    ['bad MIME', makeFile('a.mp4', HEADERS.mp4, 'text/html'), 'unsupported-type'],
+    ['oversized', makeFile('a.mp4', HEADERS.mp4, 'video/mp4', 11 * MB), 'file-too-large'],
+    ['empty', makeFile('a.mp4', new Uint8Array(0)), 'empty-file'],
+    ['HTML renamed to .mp4', makeFile('a.mp4', HEADERS.html), 'invalid-media'],
+    ['AVI bytes with .mp4 name', makeFile('a.mp4', HEADERS.avi), 'invalid-media'],
+  ])('rejects %s', async (_n, file, code) => {
+    await expect(make().accept(file)).rejects.toMatchObject({ name: 'MediaIngestionError', code });
+  });
+  it('does not read file content when cheap checks already fail', async () => {
+    const file = makeFile('a.txt', HEADERS.mp4);
+    const slice = vi.spyOn(file, 'slice');
+    await make().accept(file).catch(() => undefined);
+    expect(slice).not.toHaveBeenCalled();
+  });
+  it('reads only the leading bytes of the file', async () => {
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    const slice = vi.spyOn(file, 'slice');
+    await make().accept(file);
+    expect(slice).toHaveBeenCalledWith(0, 64);
+  });
+  it('reports processing-failed when the file cannot be read', async () => {
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    vi.spyOn(file, 'slice').mockReturnValue({ arrayBuffer: () => Promise.reject(new Error('NotReadableError')) } as unknown as Blob);
+    await expect(make().accept(file)).rejects.toMatchObject({ code: 'processing-failed' });
+  });
+});
+
+describe('createMediaIngestion.prepare', () => {
+  it('attaches processor metadata to the asset', async () => {
+    const ingestion = make();
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    const prepared = await ingestion.prepare(file, await ingestion.accept(file));
+    expect(prepared.metadata).toMatchObject({ availability: 'available', durationSeconds: 60, width: 1280 });
+  });
+  it('treats unavailable metadata as success, not failure', async () => {
+    const processor: MediaProcessor = { extractMetadata: async () => normalizeMetadata({}, 'browser', 'unsupported-by-browser') };
+    const ingestion = make(processor);
+    const file = makeFile('a.mkv', HEADERS.matroska, '');
+    const prepared = await ingestion.prepare(file, await ingestion.accept(file));
+    expect(prepared.metadata).toMatchObject({ availability: 'unavailable', unavailableReason: 'unsupported-by-browser' });
+  });
+  it('maps unexpected processor errors to a typed failure without leaking details', async () => {
+    const processor: MediaProcessor = { extractMetadata: async () => { throw new Error('ENOENT /secret/path'); } };
+    const ingestion = make(processor);
+    const file = makeFile('a.mp4', HEADERS.mp4);
+    const accepted = await ingestion.accept(file);
+    const err = await ingestion.prepare(file, accepted).catch((e: Error) => e);
+    expect(err).toMatchObject({ code: 'processing-failed' });
+    expect((err as Error).message).not.toContain('secret');
+  });
+});

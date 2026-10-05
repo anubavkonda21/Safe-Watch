@@ -117,7 +117,8 @@ Inline SVG, 24px grid, 1.6px stroke, `currentColor`, `aria-hidden` when decorati
 - **Empty:** one heading, one line of guidance, one primary action (upload zone is the model).
 - **Error:** `Alert tone="danger"` with what failed and what to do next; never expose raw error text. Keep the user's context and offer retry.
 - **Success:** confirm what happened and what is (not) available next.
-- **Upload zone states:** default, drag-over (solid accent border, subtle accent tint), processing, success, error.
+- **Upload zone states:** default (neutral surface; hover lifts to `surface-2`), drag-over (solid accent border, subtle accent tint), validating and processing (indeterminate progress, `aria-busy`), ready (success-tinted border and check), error (danger border, Alert with what/why/fix), disabled (60% opacity, control disabled). Dimensions: max 680px, min-height 280px, 32px padding, 18px radius; on mobile full width, 240px, 24px padding.
+- **Valid but unreadable:** when a file is valid but details cannot be read locally, show an info Alert, never an error.
 
 ## 10. Motion
 
