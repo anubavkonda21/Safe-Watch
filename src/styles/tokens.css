@@ -1,0 +1,86 @@
+/* SafeWatch design tokens — source of truth: SAFEWATCH_DESIGN_SYSTEM.md */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --sw-bg: #05070a;
+  --sw-bg-2: #080c11;
+  --sw-surface: #0d1218;
+  --sw-surface-2: #111821;
+  --sw-surface-hover: #151e29;
+
+  /* Borders */
+  --sw-border: #1d2630;
+  --sw-border-hover: #2a3542;
+
+  /* Text */
+  --sw-text: #f5f7fa;
+  --sw-text-2: #a1aab6;
+  --sw-text-muted: #697586;
+
+  /* Accent (sparingly) */
+  --sw-accent: #7c6cff;
+  --sw-accent-hover: #9184ff;
+  --sw-accent-subtle: rgb(124 108 255 / 0.12);
+  --sw-accent-border: rgb(124 108 255 / 0.4);
+  --sw-on-accent: #0b0a1a;
+
+  /* Semantic */
+  --sw-success: #22c55e;
+  --sw-warning: #f59e0b;
+  --sw-danger: #ef4444;
+  --sw-info: #38bdf8;
+  --sw-success-subtle: rgb(34 197 94 / 0.12);
+  --sw-warning-subtle: rgb(245 158 11 / 0.12);
+  --sw-danger-subtle: rgb(239 68 68 / 0.12);
+  --sw-info-subtle: rgb(56 189 248 / 0.12);
+
+  /* Typography */
+  --sw-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --sw-font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* Spacing (8px base) */
+  --sw-s-1: 4px;
+  --sw-s-2: 8px;
+  --sw-s-3: 12px;
+  --sw-s-4: 16px;
+  --sw-s-5: 20px;
+  --sw-s-6: 24px;
+  --sw-s-8: 32px;
+  --sw-s-10: 40px;
+  --sw-s-12: 48px;
+  --sw-s-16: 64px;
+  --sw-s-20: 80px;
+  --sw-s-24: 96px;
+
+  /* Radius */
+  --sw-r-control: 8px;
+  --sw-r-button: 8px;
+  --sw-r-input: 10px;
+  --sw-r-card: 14px;
+  --sw-r-large: 18px;
+  --sw-r-modal: 18px;
+
+  /* Shadows (restrained) */
+  --sw-shadow-popover: 0 8px 24px rgb(0 0 0 / 0.4);
+  --sw-shadow-modal: 0 24px 64px rgb(0 0 0 / 0.55);
+
+  /* Motion */
+  --sw-ease: cubic-bezier(0.2, 0, 0, 1);
+  --sw-t-fast: 140ms;
+  --sw-t-normal: 200ms;
+  --sw-t-slow: 340ms;
+
+  /* Layout */
+  --sw-max-width: 1280px;
+  --sw-gutter: 32px;
+  --sw-nav-h: 72px;
+  --sw-touch: 44px;
+}
+
+@media (max-width: 1023px) {
+  :root { --sw-gutter: 24px; }
+}
+@media (max-width: 767px) {
+  :root { --sw-gutter: 16px; --sw-nav-h: 64px; }
+}
