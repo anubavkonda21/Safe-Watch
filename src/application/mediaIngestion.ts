@@ -1,5 +1,6 @@
 import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
+import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import type { MediaAsset } from '@/domain/media/asset';
 import { PENDING_METADATA } from '@/domain/media/asset';
 import { CONTAINER_INFO, SNIFF_BYTES, detectContainer } from '@/domain/media/container';
@@ -31,6 +32,8 @@ export interface MediaIngestion {
   prepare(file: File, asset: MediaAsset, hooks?: { onProgress?: (fraction: number) => void }): Promise<PreparedMedia>;
   /** Server mode: follows extraction of audio, subtitles and frames. Local mode: resolves null (nothing is extracted). */
   extract(asset: MediaAsset, hooks?: { onUpdate?: (extraction: MediaExtraction) => void }): Promise<MediaExtraction | null>;
+  /** Server mode: follows text analysis (transcript + subtitle timeline). Local mode: resolves null. */
+  analyzeText(asset: MediaAsset, hooks?: { onUpdate?: (textAnalysis: TextAnalysis) => void }): Promise<TextAnalysis | null>;
   /** Best-effort removal of server-side data for a finished asset. */
   remove(asset: MediaAsset): Promise<void>;
 }
@@ -90,6 +93,11 @@ export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
     async extract(asset, hooks = {}) {
       if (!deps.uploader) return null;
       return deps.uploader.waitForExtraction(asset.id, { onUpdate: hooks.onUpdate });
+    },
+
+    async analyzeText(asset, hooks = {}) {
+      if (!deps.uploader) return null;
+      return deps.uploader.waitForTextAnalysis(asset.id, { onUpdate: hooks.onUpdate });
     },
 
     async remove(asset) {

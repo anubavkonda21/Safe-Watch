@@ -35,4 +35,15 @@ describe('parseServerConfig', () => {
       expect(() => parseServerConfig({ [k as string]: v as string })).toThrow(new RegExp(k as string));
     }
   });
+  it('speech-to-text is off by default and needs a model path when enabled', () => {
+    expect(parseServerConfig({}).speech).toMatchObject({ provider: 'none', modelPath: null, modelName: 'none', language: 'auto', maxTracks: 1, maxConcurrent: 1, maxDurationSeconds: 3600 });
+    expect(() => parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'whispercpp' })).toThrow(/SAFEWATCH_SPEECH_MODEL_PATH/);
+    const c = parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'whispercpp', SAFEWATCH_SPEECH_MODEL_PATH: '/models/ggml-base.bin', SAFEWATCH_SPEECH_LANGUAGE: 'HI', SAFEWATCH_SPEECH_MAX_DURATION_SECONDS: '600' }).speech;
+    expect(c).toMatchObject({ provider: 'whispercpp', modelPath: '/models/ggml-base.bin', modelName: 'ggml-base', language: 'hi', maxDurationSeconds: 600, binaryPath: 'whisper-cli' });
+  });
+  it('rejects invalid speech settings, including anything that is not a language code', () => {
+    for (const [k, v] of [['SAFEWATCH_SPEECH_PROVIDER', 'openai'], ['SAFEWATCH_SPEECH_LANGUAGE', 'en; rm -rf /'], ['SAFEWATCH_SPEECH_LANGUAGE', 'english'], ['SAFEWATCH_SPEECH_TIMEOUT_MS', '10'], ['SAFEWATCH_MAX_CONCURRENT_SPEECH', '0'], ['SAFEWATCH_SPEECH_MAX_TRACKS', '99'], ['SAFEWATCH_SPEECH_MAX_AUDIO_MB', '0']]) {
+      expect(() => parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'none', [k as string]: v as string })).toThrow(new RegExp(k as string));
+    }
+  });
 });

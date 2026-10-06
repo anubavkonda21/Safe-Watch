@@ -1,0 +1,28 @@
+.sw-filters { max-width: 680px; margin-inline: auto; display: grid; gap: var(--sw-s-4); }
+.sw-filters__form { display: grid; grid-template-columns: 1fr 180px auto; gap: var(--sw-s-3); align-items: start; padding: var(--sw-s-6); background: var(--sw-surface); border: 1px solid var(--sw-border); border-radius: var(--sw-r-large); }
+.sw-filters__add { margin-top: 26px; }
+.sw-filters__empty { text-align: center; padding-block: var(--sw-s-4); }
+.sw-filters__list { display: grid; gap: var(--sw-s-2); }
+.sw-filter { display: flex; align-items: center; gap: var(--sw-s-3); padding: var(--sw-s-2) var(--sw-s-2) var(--sw-s-2) var(--sw-s-4); background: var(--sw-surface); border: 1px solid var(--sw-border); border-radius: var(--sw-r-card); transition: border-color var(--sw-t-fast) var(--sw-ease); }
+.sw-filter:hover { border-color: var(--sw-border-hover); }
+.sw-filter__text { display: grid; flex: 1; min-width: 0; }
+.sw-filter__phrase { overflow-wrap: anywhere; font-weight: 500; }
+.sw-filter.is-off .sw-filter__phrase { color: var(--sw-text-2); text-decoration: line-through; text-decoration-color: var(--sw-border-hover); }
+.sw-switch { position: relative; display: inline-flex; align-items: center; gap: var(--sw-s-2); min-height: var(--sw-touch); padding: 0 var(--sw-s-2); background: transparent; border: 0; border-radius: var(--sw-r-control); color: var(--sw-text-2); cursor: pointer; }
+.sw-switch::before { content: ''; width: 32px; height: 18px; border-radius: 999px; background: var(--sw-border-hover); transition: background-color var(--sw-t-fast) var(--sw-ease); }
+.sw-switch::after { content: ''; position: absolute; left: calc(var(--sw-s-2) + 2px); top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%; background: var(--sw-text); transition: transform var(--sw-t-fast) var(--sw-ease); }
+.sw-switch[aria-checked='true']::before { background: var(--sw-accent); }
+.sw-switch[aria-checked='true']::after { transform: translateX(14px); }
+.sw-switch__label { min-width: 44px; text-align: left; }
+.sw-filters__note { text-align: center; }
+
+/* Narrow screens: the switch itself (position + colour) and the struck-through phrase show the state; the word stays available to assistive tech. */
+@media (max-width: 479px) {
+  .sw-switch__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .sw-filter { padding-left: var(--sw-s-3); gap: var(--sw-s-1); }
+}
+
+@media (max-width: 767px) {
+  .sw-filters__form { grid-template-columns: 1fr; padding: var(--sw-s-4); }
+  .sw-filters__add { margin-top: 0; width: 100%; }
+}

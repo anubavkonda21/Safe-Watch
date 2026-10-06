@@ -22,3 +22,13 @@ export function formatElapsed(ms: number): string {
   if (s < 60) return `${Number(s.toFixed(1))} s`;
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`;
 }
+
+/** Media time as m:ss.cc (h:mm:ss.cc from one hour), for transcript and match timestamps. */
+export function formatTimecode(totalSeconds: number): string {
+  const cs = Math.round(Math.max(0, totalSeconds) * 100);
+  const h = Math.floor(cs / 360000);
+  const m = Math.floor((cs % 360000) / 6000);
+  const s = Math.floor((cs % 6000) / 100);
+  const frac = String(cs % 100).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${frac}` : `${m}:${String(s).padStart(2, '0')}.${frac}`;
+}

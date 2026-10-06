@@ -6,7 +6,7 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
-**Checkpoint 3 — media extraction pipeline.** The interface, a Node API, secure upload, temporary storage, FFprobe/FFmpeg processing and deterministic extraction of audio, subtitles and frames exist. There is **no analysis and no AI** (no speech-to-text, no detection, no scoring): a video can be `Media: ready`, `Extraction: completed` and `Analysis: not started` at the same time.
+**Checkpoint 4 — speech & subtitle intelligence foundation.** On top of upload, storage, FFprobe/FFmpeg and deterministic extraction, SafeWatch now transcribes speech locally (whisper.cpp) and merges it with subtitle text into one timestamped, aligned timeline, and can find user-defined words and phrases in it. This is **text evidence only**: there is **no safety classification, no scoring, no verdict, and nothing is muted, censored or changed**. A video can be `Media: ready`, `Extraction: completed`, `Text: ready` and `Analysis: not started` at the same time.
 
 | Capability | Status |
 | --- | --- |
@@ -23,12 +23,17 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Subtitle detection + text extraction to timestamped cues (image subtitles reported as unsupported) | IMPLEMENTED |
 | Deterministic, capped frame sampling (JPEG) | IMPLEMENTED |
 | Extraction manifest API, phase-based progress, extraction UI | IMPLEMENTED |
+| Speech-to-text (local whisper.cpp, word timestamps, language detection) | IMPLEMENTED — optional, off unless configured |
+| Transcript model, track selection, speech/subtitle timeline and alignment | IMPLEMENTED |
+| Custom filters (add/enable/remove) and deterministic match detection in speech and subtitles | IMPLEMENTED — detection only |
+| Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
 | Persistent database, authentication, background workers | PLANNED |
 | Responsive layout, accessibility foundation | IMPLEMENTED |
 | Tests, lint, typecheck, build | IMPLEMENTED |
-| Speech-to-text, subtitle analysis (any AI) | PLANNED (not implemented) |
+| Profanity / sensitive-topic classification, visual AI, safety score, verdicts | PLANNED (not implemented) |
+| Muting, beeping, subtitle censoring, blurring, scene skipping | PLANNED (not implemented) |
 | Profanity / custom phrase detection | PLANNED |
 | Visual detection (violence, graphic, drugs, sexual content) | PLANNED |
 | Contextual analysis, risk score, timeline | PLANNED |
@@ -128,9 +133,29 @@ API: `GET /api/media/:id/extraction` returns the manifest; `GET /api/media/:id` 
 
 Measure it yourself: `npm run check:extraction -- /path/to/video.mkv`.
 
+## Speech and subtitle intelligence (Checkpoint 4)
+
+```
+AudioAsset (WAV 16 kHz mono) ──► SpeechToTextProvider (port) ──► whisper.cpp ──► Transcript (segments, word times, language)
+SubtitleTrack (text cues) ─────────────────────────────────────────────────────┐
+                                                                               ▼
+                                          TextEvent timeline (speech + subtitle) ──► alignment: both / speech-only / subtitle-only
+                                                                               ▼
+                       Custom filters (browser) ──► TextMatch { source, start, end, matchedText, confidence }   (evidence only)
+```
+
+- **Provider:** whisper.cpp, native and local (no Python), multilingual `ggml-base` model (141 MB). Replaceable behind `SpeechToTextProvider`. **Audio never leaves the machine.**
+- **Setup:** `brew install whisper-cpp`, `scripts/download-speech-model.sh` (verifies the checksum; weights are git-ignored), then set `SAFEWATCH_SPEECH_PROVIDER=whispercpp` and `SAFEWATCH_SPEECH_MODEL_PATH=models/ggml-base.bin` (see `.env.example`). Without them the server still runs and collects subtitle text only. For Hindi use `scripts/download-speech-model.sh small`.
+- **API:** `GET /api/media/:id/transcript` (`?words=false` omits word timestamps). `/api/health` reports only `speech: {provider, available}`.
+- **Timestamps:** media time in milliseconds. Word **start** times are reliable (DTW alignment, ≈0.1 s in tests); a word's **end** is an upper bound.
+- **Language:** detected per track; never translated. Measured limits: Hindi on `base` is written in Urdu script; code-switched Hindi/English is not transcribed faithfully by either model; the brand name "SafeWatch" is heard as "safe watch" (the `phrase` match mode handles it).
+- **Custom filters:** a "Custom filters" section lets the visitor add words/phrases (Whole word, Phrase, Contains, Exact case), enable/disable and remove them. They stay in the browser; matches are listed with source, time and confidence. SafeWatch does not mute or alter anything.
+- Measure it yourself: `npm run check:speech -- video.mp4`. Details, decisions, privacy and limits: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §26.
+
 ## Technology stack
 
 - **Vite + React 19 + TypeScript (strict)** — SPA with fast tooling.
+- **whisper.cpp** (local speech-to-text, external process; installed with Homebrew, not an npm/Python dependency).
 - **Node 24 (no web framework)** — the API uses `node:http`; **FFmpeg/FFprobe** as external processes; **tsx** to run TypeScript in development.
 - **React Router** — routing.
 - **Plain CSS with design tokens** — no UI framework; tokens in `src/styles/tokens.css`.
@@ -154,6 +179,8 @@ npm run dev
 | `npm run build:server` / `npm start` | Bundle and run the API (`dist-server/`) |
 | `npm run check:large -- <file>` | Manual large-file streaming/memory check |
 | `npm run check:extraction -- <file...>` | Manual extraction timing, size, memory and cleanup check |
+| `npm run check:speech -- <file...>` | Manual real speech-to-text timing, memory and accuracy check |
+| `scripts/download-speech-model.sh [base\|small]` | Download and verify a whisper.cpp model into `models/` |
 | `npm run build` | Typecheck and production build to `dist/` |
 | `npm run preview` | Serve the production build |
 | `npm test` | Run tests once (`test:watch` for watch mode) |

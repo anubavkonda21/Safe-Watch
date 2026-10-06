@@ -5,6 +5,7 @@ import { Hero } from '@/components/marketing/Hero';
 import { HowItWorks } from '@/components/marketing/HowItWorks';
 import { AboutSection, SafetySection } from '@/components/marketing/InfoSections';
 import { UploadSection } from '@/components/marketing/UploadSection';
+import { CustomFiltersSection } from '@/features/filters/CustomFilters';
 
 export function HomePage() {
   return (
@@ -15,6 +16,7 @@ export function HomePage() {
         <Hero />
         <FeaturePreview />
         <UploadSection />
+        <CustomFiltersSection />
         <HowItWorks />
         <SafetySection />
         <AboutSection />

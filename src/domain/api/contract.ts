@@ -1,5 +1,6 @@
 import type { AnalysisState } from '../analysis/job';
 import type { ExtractionState, MediaExtraction } from '../extraction/extraction';
+import type { TextAnalysis, TextAnalysisState } from '../text/textAnalysis';
 import type { MediaAsset } from '../media/asset';
 import type { MediaErrorCode } from '../media/errors';
 
@@ -11,6 +12,7 @@ export const API_PATHS = {
   health: '/api/health',
   media: '/api/media',
   extraction: (id: string) => `/api/media/${encodeURIComponent(id)}/extraction`,
+  transcript: (id: string) => `/api/media/${encodeURIComponent(id)}/transcript`,
 } as const;
 
 /** Original filename travels in a header (URI-encoded), never in the URL or as a path. */
@@ -39,7 +41,13 @@ export interface MediaResource {
   asset: MediaAsset;
   /** Extraction state only; the full manifest is at `GET /api/media/:id/extraction`. */
   extraction: ExtractionState;
+  /** Text evidence stage (speech transcript + subtitle timeline). Not a safety analysis. */
+  text: TextAnalysisState;
   analysis: AnalysisState;
+}
+
+export interface TextAnalysisResponse {
+  textAnalysis: TextAnalysis;
 }
 
 export interface ExtractionResponse {
@@ -56,6 +64,8 @@ export interface HealthResponse {
   version: string;
   environment: string;
   tools: { ffmpeg: boolean; ffprobe: boolean };
+  /** Speech-to-text engine availability. Never includes model names, paths or versions. */
+  speech: { provider: string; available: boolean };
 }
 
 export function isApiErrorCode(value: unknown): value is ApiErrorCode {

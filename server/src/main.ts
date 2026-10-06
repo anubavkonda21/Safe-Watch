@@ -1,10 +1,12 @@
 import { parseServerConfig } from './config';
 import { MediaExtractionService } from './application/extractionService';
 import { MediaService } from './application/mediaService';
+import { TextAnalysisService, limitsFromConfig } from './application/textAnalysisService';
 import { ProcessingQueue } from './application/processingQueue';
 import { createApiServer } from './api/server';
 import { FfmpegMediaExtractor } from './infrastructure/ffmpeg/ffmpegMediaExtractor';
 import { FfmpegMediaProcessor } from './infrastructure/ffmpeg/ffmpegMediaProcessor';
+import { WhisperCppProvider } from './infrastructure/speech/whisperCppProvider';
 import { InMemoryMediaRepository } from './infrastructure/inMemoryMediaRepository';
 import { createJsonLogger } from './infrastructure/jsonLogger';
 import { LocalDiskMediaStorage } from './infrastructure/storage/localDiskMediaStorage';
@@ -26,13 +28,26 @@ if (!tools.ffmpeg || !tools.ffprobe) {
 const version = process.env.npm_package_version ?? 'unknown'; // set by npm when started through an npm script
 const storage = new LocalDiskMediaStorage(config.storageDir);
 const repository = new InMemoryMediaRepository();
-const { extraction: ex } = config;
+const { extraction: ex, speech: sp } = config;
+const speechProvider = sp.provider === 'whispercpp' && sp.modelPath
+  ? new WhisperCppProvider({ binaryPath: sp.binaryPath, modelPath: sp.modelPath, modelName: sp.modelName, threads: sp.threads })
+  : null;
+const speechAvailable = speechProvider ? await speechProvider.isAvailable() : false;
+if (speechProvider) {
+  const swept = await speechProvider.cleanupStale();
+  if (swept > 0) logger.info('removed stale speech temp directories', { op: 'startup-cleanup', removed: swept });
+}
+if (speechProvider && !speechAvailable) logger.warn('speech-to-text unavailable: binary or model not found; only subtitle evidence will be collected', { op: 'startup', provider: sp.provider });
+const textAnalysis = new TextAnalysisService({
+  storage, repository, speech: speechProvider, queue: new ProcessingQueue(sp.maxConcurrent, sp.maxQueued), logger, limits: limitsFromConfig(sp),
+});
 const extraction = new MediaExtractionService({
   storage,
   repository,
   extractor: new FfmpegMediaExtractor(config),
   queue: new ProcessingQueue(ex.maxConcurrent, ex.maxQueued),
   logger,
+  onCompleted: (id, requestId) => textAnalysis.schedule(id, requestId),
   limits: { timeoutMs: ex.timeoutMs, frame: ex.frame, maxFrameBytes: ex.maxFrameBytes, maxAudioBytes: ex.maxAudioBytes, maxAudioTracks: ex.maxAudioTracks, maxCues: ex.maxCues, maxSubtitleBytes: ex.maxSubtitleBytes },
 });
 const mediaService = new MediaService({
@@ -41,6 +56,7 @@ const mediaService = new MediaService({
   processor: new FfmpegMediaProcessor(config),
   queue: new ProcessingQueue(config.maxConcurrentProcessing, config.maxQueuedProcessing),
   extraction,
+  textAnalysis,
   logger,
   limits: config,
 });
@@ -51,7 +67,7 @@ const server = createApiServer({
   logger,
   limits: config,
   allowedOrigins: config.allowedOrigins,
-  health: { version, environment: config.environment, tools },
+  health: { version, environment: config.environment, tools, speech: { provider: sp.provider, available: speechAvailable } },
 });
 
 const sweeper = setInterval(() => { void mediaService.sweep(); }, config.sweepIntervalMs);

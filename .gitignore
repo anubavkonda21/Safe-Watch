@@ -11,3 +11,4 @@ coverage
 dist-server
 .safewatch-storage
 .vitest
+models/

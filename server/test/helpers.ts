@@ -13,6 +13,10 @@ import { MediaExtractionService } from '../src/application/extractionService';
 import type { MediaExtractor } from '../src/application/extractionPorts';
 import type { ExtractionLimits } from '../src/application/extractionTypes';
 import { FfmpegMediaExtractor } from '../src/infrastructure/ffmpeg/ffmpegMediaExtractor';
+import { TextAnalysisService, type TextAnalysisLimits } from '../src/application/textAnalysisService';
+import type { SpeechToTextProvider } from '../src/application/speechPorts';
+import { WhisperCppProvider } from '../src/infrastructure/speech/whisperCppProvider';
+import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import { MediaService } from '../src/application/mediaService';
 import type { Logger, ServerMediaProcessor } from '../src/application/ports';
 import { ProcessingQueue } from '../src/application/processingQueue';
@@ -35,6 +39,7 @@ export interface TestApp {
   logs: Array<Record<string, unknown>>;
   service: MediaService;
   extraction?: MediaExtractionService;
+  textAnalysis?: TextAnalysisService;
   repository: InMemoryMediaRepository;
   storage: LocalDiskMediaStorage;
   clock: { now: number };
@@ -54,7 +59,16 @@ export interface TestAppOptions {
   toolsStatus?: { ffmpeg: boolean; ffprobe: boolean };
   /** Enables extraction after media is ready. Omit to test media handling alone. */
   extraction?: { extractor?: MediaExtractor; limits?: Partial<ExtractionLimits>; maxConcurrent?: number; maxQueued?: number };
+  /** Enables text analysis after extraction. `provider: null` = speech-to-text not configured (subtitle evidence only). Requires `extraction`. */
+  speech?: { provider: SpeechToTextProvider | null; limits?: Partial<TextAnalysisLimits>; maxConcurrent?: number; maxQueued?: number };
 }
+
+export const defaultSpeechLimits = (): TextAnalysisLimits => ({ language: 'auto', timeoutMs: 30_000, maxAudioBytes: 256 * 1024 * 1024, maxDurationSeconds: 3600, maxTracks: 1 });
+
+/** The real local model, if installed (see SAFEWATCH docs). Real-inference tests skip themselves without it. */
+export const MODEL_PATH = new URL('../../models/ggml-base.bin', import.meta.url).pathname;
+export const realSpeech = new WhisperCppProvider({ binaryPath: 'whisper-cli', modelPath: MODEL_PATH, modelName: 'ggml-base', threads: 4 });
+export const hasRealSpeech = await realSpeech.isAvailable();
 
 export const defaultExtractionLimits = (): ExtractionLimits => ({
   timeoutMs: 30_000,
@@ -84,16 +98,23 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
     processingTimeoutMs: opts.processingTimeoutMs ?? 10_000,
     retentionMs: opts.retentionMs ?? 60 * 60_000,
   };
+  const textAnalysis = opts.extraction && opts.speech
+    ? new TextAnalysisService({
+        storage, repository, logger, now: () => clock.now, speech: opts.speech.provider,
+        queue: new ProcessingQueue(opts.speech.maxConcurrent ?? 1, opts.speech.maxQueued ?? 10),
+        limits: { ...defaultSpeechLimits(), ...opts.speech.limits },
+      })
+    : undefined;
   const extraction = opts.extraction
     ? new MediaExtractionService({
-        storage, repository, logger, now: () => clock.now,
+        storage, repository, logger, now: () => clock.now, onCompleted: (id, rid) => textAnalysis?.schedule(id, rid),
         extractor: opts.extraction.extractor ?? new FfmpegMediaExtractor({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' }),
         queue: new ProcessingQueue(opts.extraction.maxConcurrent ?? 1, opts.extraction.maxQueued ?? 10),
         limits: { ...defaultExtractionLimits(), ...opts.extraction.limits },
       })
     : undefined;
   const service = new MediaService({
-    storage, repository, logger, limits, extraction,
+    storage, repository, logger, limits, extraction, textAnalysis,
     processor: opts.processor ?? fakeProcessor(),
     queue: new ProcessingQueue(opts.maxConcurrentProcessing ?? 2, opts.maxQueuedProcessing ?? 10),
     now: () => clock.now,
@@ -101,12 +122,12 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
   const server = createApiServer({
     mediaService: service, logger, limits: { uploadTimeoutMs: 30_000 },
     allowedOrigins: opts.allowedOrigins ?? ['http://localhost:5173'],
-    health: { version: '0.0.0-test', environment: 'test', tools: opts.toolsStatus ?? { ffmpeg: true, ffprobe: true } },
+    health: { version: '0.0.0-test', environment: 'test', tools: opts.toolsStatus ?? { ffmpeg: true, ffprobe: true }, speech: { provider: opts.speech?.provider ? 'test' : 'none', available: !!opts.speech?.provider } },
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    url, storageDir, logs, service, extraction, repository, storage, clock,
+    url, storageDir, logs, service, extraction, textAnalysis, repository, storage, clock,
     files: async () => (await readdir(storageDir)).filter((f) => f !== '.safewatch-storage'),
     close: async () => {
       server.closeAllConnections();
@@ -162,4 +183,15 @@ export function generateVideo(file: string, o: { width: number; height: number; 
   if (o.audio) args.push('-c:a', 'aac', '-b:a', '24k');
   args.push(file);
   execFileSync('ffmpeg', args, { stdio: 'ignore' });
+}
+
+export async function waitForTextAnalysis(app: TestApp, id: string, timeoutMs = 60_000): Promise<TextAnalysis> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await fetch(`${app.url}/api/media/${id}/transcript`);
+    const { textAnalysis } = (await res.json()) as { textAnalysis: TextAnalysis };
+    if (textAnalysis.status === 'ready' || textAnalysis.status === 'failed') return textAnalysis;
+    if (Date.now() > end) throw new Error(`timed out waiting for text analysis; last=${textAnalysis.status}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
 }

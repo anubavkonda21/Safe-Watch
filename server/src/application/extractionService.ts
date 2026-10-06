@@ -21,6 +21,8 @@ export interface ExtractionServiceDeps {
   logger: Logger;
   limits: ExtractionLimits;
   now?: () => number;
+  /** Called after an extraction has completed (used to start text analysis). */
+  onCompleted?: (mediaId: string, requestId?: string) => void;
 }
 
 /** What the media service needs from extraction. */
@@ -83,6 +85,7 @@ export class MediaExtractionService implements ExtractionScheduler {
 
   private async run(mediaId: string, requestId?: string): Promise<void> {
     const { repository, storage, logger, limits } = this.deps;
+    const deps = this.deps;
     const queued = repository.get(mediaId);
     if (!queued || queued.extraction.status !== 'queued') return; // deleted or already handled while waiting
     const started = this.now();
@@ -100,6 +103,7 @@ export class MediaExtractionService implements ExtractionScheduler {
         }),
       );
       const done = this.update(mediaId, (r) => ({ ...r, extraction: completeExtraction(r.extraction, { ...result, metrics: { ...result.metrics, durationMs: this.now() - started } }, iso(this.now())) }));
+      deps.onCompleted?.(mediaId, requestId);
       logger.info('extraction completed', {
         op: 'extract', requestId, mediaId, status: 'completed', durationMs: this.now() - started,
         audioTracks: done.extraction.audio.length, subtitleTracks: done.extraction.subtitles.length,

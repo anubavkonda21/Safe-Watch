@@ -37,6 +37,8 @@ export interface MediaStorage {
   withLocalFile<T>(id: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T>;
   /** Runs `fn` with a private directory for this media's derived assets (audio, frames), creating it if needed. */
   withExtractionDir<T>(id: string, fn: (workspace: ExtractionWorkspace) => Promise<T>): Promise<T>;
+  /** Runs `fn` with a local file for a derived asset (e.g. an audio track) for tools that need a path. Same contract as `withLocalFile`. */
+  withArtifactFile<T>(id: string, artifact: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T>;
   /** Reads a derived asset by its logical artifact name (e.g. `frames/frm-00001.jpg`). Names are validated; paths are never accepted. */
   readArtifact(id: string, artifact: string): AsyncIterable<Uint8Array>;
   deleteArtifact(id: string, artifact: string): Promise<void>;

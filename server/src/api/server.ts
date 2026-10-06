@@ -12,7 +12,7 @@ export interface ApiDeps {
   logger: Logger;
   limits: { uploadTimeoutMs: number };
   allowedOrigins: readonly string[];
-  health: { version: string; environment: string; tools: { ffmpeg: boolean; ffprobe: boolean } };
+  health: { version: string; environment: string; tools: { ffmpeg: boolean; ffprobe: boolean }; speech: { provider: string; available: boolean } };
 }
 
 const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
@@ -75,8 +75,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
         code = 'NOT_FOUND';
         return sendError(req, res, code, requestId);
       }
-      const { tools, version, environment } = deps.health;
-      const body: HealthResponse = { status: tools.ffmpeg && tools.ffprobe ? 'ok' : 'degraded', service: 'safewatch-api', version, environment, tools };
+      const { tools, version, environment, speech } = deps.health;
+      const body: HealthResponse = { status: tools.ffmpeg && tools.ffprobe ? 'ok' : 'degraded', service: 'safewatch-api', version, environment, tools, speech };
       return sendJson(res, 200, body);
     }
 
@@ -89,6 +89,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
     const extractionMatch = /^\/api\/media\/([^/]+)\/extraction$/.exec(path);
     if (extractionMatch?.[1] && req.method === 'GET') {
       return sendJson(res, 200, { extraction: deps.mediaService.getExtraction(extractionMatch[1]) });
+    }
+
+    const transcriptMatch = /^\/api\/media\/([^/]+)\/transcript$/.exec(path);
+    if (transcriptMatch?.[1] && req.method === 'GET') {
+      return sendJson(res, 200, { textAnalysis: deps.mediaService.getTextAnalysis(transcriptMatch[1], { words: url.searchParams.get('words') !== 'false' }) });
     }
 
     const match = /^\/api\/media\/([^/]+)$/.exec(path);

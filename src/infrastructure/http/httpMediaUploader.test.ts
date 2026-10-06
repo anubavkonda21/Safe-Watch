@@ -2,12 +2,13 @@ import type { MediaResource } from '@/domain/api/contract';
 import { PENDING_METADATA, type MediaAsset } from '@/domain/media/asset';
 import { HttpMediaUploader } from './httpMediaUploader';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
+import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
 
 const asset = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaAsset => ({
   id: 'srv-1', filename: 'a.mp4', mimeType: 'video/mp4', container: 'mp4', typeLabel: 'MP4 video', sizeBytes: 5,
   status, metadata: PENDING_METADATA, createdAt: 'x', failure: null, ...extra,
 });
-const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } });
+const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } });
 
 class FakeXhr {
   static last: FakeXhr;
@@ -160,6 +161,40 @@ describe('HttpMediaUploader', () => {
       vi.stubGlobal('fetch', vi.fn(async () => respond(processingExtraction('srv-1', 'preparing'))));
       const ac = new AbortController();
       const p = make().waitForExtraction('srv-1', { signal: ac.signal });
+      ac.abort();
+      await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
+    });
+  });
+
+  describe('waitForTextAnalysis', () => {
+    const respond = (t: unknown) => new Response(JSON.stringify({ textAnalysis: t }), { status: 200 });
+    it('polls the slim transcript, reports each change once, then fetches the full result (with word timestamps) when ready', async () => {
+      const urls: string[] = [];
+      const seq = [processingTextAnalysis('srv-1', 'speech-processing'), processingTextAnalysis('srv-1', 'speech-processing'), processingTextAnalysis('srv-1', 'building-timeline'), readyTextAnalysis('srv-1'), readyTextAnalysis('srv-1')];
+      vi.stubGlobal('fetch', vi.fn(async (u: string) => { urls.push(u); return respond(seq.shift()); }));
+      const onUpdate = vi.fn();
+      const result = await make().waitForTextAnalysis('srv-1', { onUpdate });
+      expect(result.status).toBe('ready');
+      expect(onUpdate.mock.calls.map((c) => `${c[0].status}:${c[0].phase}`)).toEqual(['processing:speech-processing', 'processing:building-timeline', 'ready:null']);
+      expect(urls.slice(0, 4).every((u) => u.endsWith('/api/media/srv-1/transcript?words=false'))).toBe(true);
+      expect(urls.at(-1)).toBe('http://api.test/api/media/srv-1/transcript');
+    });
+    it('returns a failed analysis as a value without a second request', async () => {
+      const f = vi.fn(async () => respond({ ...processingTextAnalysis('srv-1', null), status: 'failed', issues: [{ code: 'server-busy', stage: 'queue', fatal: true, trackId: null }] }));
+      vi.stubGlobal('fetch', f);
+      await expect(make().waitForTextAnalysis('srv-1')).resolves.toMatchObject({ status: 'failed' });
+      expect(f).toHaveBeenCalledTimes(1);
+    });
+    it('times out, reports an unreachable server, maps gateway errors, and stops on abort', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingTextAnalysis('srv-1', 'preparing'))));
+      await expect(make({ extractionTimeoutMs: 30 }).waitForTextAnalysis('srv-1')).rejects.toMatchObject({ code: 'timeout' });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+      await expect(make().waitForTextAnalysis('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
+      await expect(make().waitForTextAnalysis('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingTextAnalysis('srv-1', 'preparing'))));
+      const ac = new AbortController();
+      const p = make().waitForTextAnalysis('srv-1', { signal: ac.signal });
       ac.abort();
       await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
     });

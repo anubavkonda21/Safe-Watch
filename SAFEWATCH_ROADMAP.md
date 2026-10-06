@@ -8,8 +8,8 @@ Each checkpoint is reviewed before the next is started. Scopes below are intent,
 | 1 | Media Ingestion | Architecture decision (Node API + FFmpeg, phased), media domain model, ingestion state machine, `MediaProcessor` port, content-sniffing validation, browser metadata adapter | DONE |
 | 2 | Server Media Foundation | Node API, streamed upload, temporary storage lifecycle, FFprobe metadata, FFmpeg decode check, `AnalysisJob` boundary, upload progress UI | DONE |
 | 3 | Media Extraction Pipeline | Audio (WAV), subtitle cues, capped frame sampling, extraction manifest/API/UI, limits, cleanup, determinism | DONE |
-| 4 | Speech + Subtitle Intelligence | Speech-to-text on extracted audio, subtitle analysis, timestamped transcript (first AI checkpoint) | PLANNED |
-| 5 | Custom Word/Phrase Detection | User word lists, matching with timestamps, profanity baseline | PLANNED |
+| 4 | Speech + Subtitle Intelligence Foundation | Local speech-to-text (whisper.cpp) behind a port, transcript model with word timing, track selection, speech/subtitle timeline and alignment, custom-filter model with deterministic match detection, transcript and filters UI. Text evidence only | DONE |
+| 5 | Custom Word/Phrase Detection | Builds on the Checkpoint 4 foundation (models, matching, UI exist): server-side/persistent filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
 | 6 | Visual Content Detection | Frame analysis for violence, graphic, drugs, sexual content with confidence | PLANNED |
 | 7 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
 | 8 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |

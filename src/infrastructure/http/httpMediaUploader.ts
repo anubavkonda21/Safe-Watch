@@ -1,6 +1,7 @@
 import type { MediaUploader, UploadHooks } from '@/application/mediaUploader';
-import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse } from '@/domain/api/contract';
+import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse, type TextAnalysisResponse } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
+import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import { MediaIngestionError } from '@/domain/media/errors';
 import { sanitizeFilename } from '@/domain/media/validation';
 
@@ -51,6 +52,37 @@ export class HttpMediaUploader implements MediaUploader {
         const key = `${extraction.status}|${extraction.phase}`;
         if (key !== lastKey) { lastKey = key; hooks.onUpdate?.(extraction); }
         if (extraction.status === 'completed' || extraction.status === 'failed') return extraction;
+      } catch (e) {
+        if (e instanceof MediaIngestionError) throw e;
+        if (++failures >= 3) throw new MediaIngestionError('server-unreachable');
+      }
+      if (Date.now() > deadline) throw new MediaIngestionError('timeout');
+      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+    }
+  }
+
+  async waitForTextAnalysis(mediaId: string, hooks: { onUpdate?: (t: TextAnalysis) => void; signal?: AbortSignal } = {}): Promise<TextAnalysis> {
+    const deadline = Date.now() + this.extractionTimeoutMs;
+    const url = `${this.options.baseUrl}${API_PATHS.transcript(mediaId)}`;
+    let lastKey = '';
+    let failures = 0;
+    for (;;) {
+      if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
+      try {
+        // While waiting, ask for the slim form (no word timestamps); fetch the full one once it is final.
+        const res = await fetch(`${url}?words=false`, { signal: hooks.signal });
+        const body = parse(await res.text());
+        if (!res.ok || !isTextAnalysisResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
+        failures = 0;
+        const t = body.textAnalysis;
+        const key = `${t.status}|${t.phase}`;
+        if (t.status === 'ready' || t.status === 'failed') {
+          const full = t.status === 'ready' ? await fetch(url, { signal: hooks.signal }).then(async (r) => parse(await r.text())) : body;
+          const result = isTextAnalysisResponse(full) ? full.textAnalysis : t;
+          hooks.onUpdate?.(result);
+          return result;
+        }
+        if (key !== lastKey) { lastKey = key; hooks.onUpdate?.(t); }
       } catch (e) {
         if (e instanceof MediaIngestionError) throw e;
         if (++failures >= 3) throw new MediaIngestionError('server-unreachable');
@@ -126,6 +158,10 @@ function parse(text: string): unknown {
 
 function isExtractionResponse(v: unknown): v is ExtractionResponse {
   return typeof v === 'object' && v !== null && 'extraction' in v && typeof (v as { extraction: { status?: unknown } }).extraction?.status === 'string';
+}
+
+function isTextAnalysisResponse(v: unknown): v is TextAnalysisResponse {
+  return typeof v === 'object' && v !== null && 'textAnalysis' in v && typeof (v as { textAnalysis: { status?: unknown } }).textAnalysis?.status === 'string';
 }
 
 function isMediaResponse(v: unknown): v is MediaResponse {

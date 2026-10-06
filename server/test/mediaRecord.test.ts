@@ -17,7 +17,7 @@ describe('server media record', () => {
   it('uploaded → processing → ready keeps media and analysis status separate', () => {
     const r = markReady(markProcessing(createUploadedRecord(asset, 0, 1)), meta);
     expect(r.asset).toMatchObject({ status: 'ready', metadata: { durationSeconds: 3 } });
-    expect(toResource(r)).toEqual({ asset: r.asset, extraction: { status: 'not_started', phase: null }, analysis: { status: 'not_started' } });
+    expect(toResource(r)).toEqual({ asset: r.asset, extraction: { status: 'not_started', phase: null }, text: { status: 'not_started', phase: null }, analysis: { status: 'not_started' } });
   });
   it('processing → failed records the typed failure', () => {
     const r = markFailed(markProcessing(createUploadedRecord(asset, 0, 1)), 'timeout');

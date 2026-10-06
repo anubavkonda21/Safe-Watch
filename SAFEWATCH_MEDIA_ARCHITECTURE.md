@@ -304,3 +304,86 @@ Future analysis code receives these values and reads artifact bytes through the 
 ## 25. Security status (unchanged gate)
 
 All Checkpoint 2 controls apply to every extraction command (argv arrays, `shell: false`, minimal environment, closed stdin, `-protocol_whitelist file`, forced demuxer, timeouts, output caps, server-generated output names inside the job's directory with a path-escape guard, partial output removed on failure). Subtitle text and stream metadata are untrusted: sanitised, never logged, never interpreted as HTML. **FFmpeg isolation is still NOT COMPLETED** and remains a production security gate: there is still no OS sandbox, separate user, or memory/CPU cgroup. Measured example: decoding a 4K source made an FFmpeg child reach about 307 MB RSS with nothing limiting it.
+
+---
+
+## 26. Speech & subtitle intelligence (Checkpoint 4)
+
+First AI inference in SafeWatch. It produces **text evidence only**: what was said or written, and when. It never decides whether media is safe, and it never mutes, hides or edits anything.
+
+```
+ MediaExtraction (completed)                               shared pure domain (src/domain/{speech,text})
+   │ AudioAsset (WAV 16 kHz mono) · SubtitleTrack/Cue       Transcript · normalizeTranscription · selectAudioTracks
+   ▼                                                        TextEvent · alignText · CustomFilter · findTextMatches
+ TextAnalysisService  (bounded queue, default 1 job)        TextAnalysis lifecycle
+   │ policy: track selection, limits, timeouts, cleanup
+   ├─► SpeechToTextProvider (port) ◄── WhisperCppProvider ──► whisper-cli process ──► ggml model file
+   │         raw, provider-neutral transcription (untrusted)
+   ├─► normalizeTranscription + validateTranscript   → Transcript[]
+   └─► eventsFromTranscript + eventsFromSubtitleTrack → buildTimeline → alignText → TextAnalysis.timeline
+```
+
+### 26.1 Provider evaluation
+
+| Option | Accuracy / timestamps | Hindi & Indian-English | Apple Silicon / CPU | Install | Privacy | Cost | Verdict |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **whisper.cpp** (Whisper family, native C++, ggml) | Whisper quality; segment times plus token times, optional DTW word alignment | Multilingual models; Hindi needs `small` (measured) | Metal and CPU out of the box, no Python or GPU needed | `brew install whisper-cpp` + one model file | Fully local | None | **Chosen** |
+| faster-whisper (CTranslate2) | Same models, often faster on x86/CUDA; built-in word timestamps | Same | CPU only on Apple Silicon (no Metal) | Python venv, `ctranslate2` wheels, model download on first use | Local | None | Good on servers with GPUs; adds a Python runtime we do not need yet |
+| OpenAI Whisper (PyTorch) | Reference quality | Same | Slower on CPU; heavy dependencies (torch) | Python + PyTorch | Local | None | Heaviest to run |
+| Hosted STT API | Strong, often best accuracy | Strong | n/a | API key | **Audio leaves the machine** | Per-minute, grows with usage | Rejected for now: privacy and cost; the port makes it a later swap |
+| Vosk / other local engines | Lower accuracy, weak punctuation | Limited | CPU | Model per language | Local | None | Not accurate enough for evidence |
+
+**Decision:** whisper.cpp with the multilingual `ggml-base` model (141 MB, SHA-1 `465707469ff3a37a2b9b8d8f89f2f99de7299dac`, verified by `scripts/download-speech-model.sh`). It is the smallest model that is multilingual, runs about 16× faster than real time on this laptop, and needs no Python. **Python is not used at all**, so there is no Node/Python dependency tangle: the boundary is a single native executable behind `SpeechToTextProvider`. Only one provider exists; the port is what keeps it replaceable.
+
+**Measured model comparison on this machine** (synthetic speech, see report): `base` transcribes English and Indian-accented English well but writes Hindi in **Urdu script** with word errors; `small` (465 MB, SHA-1 `55356645c2b361a969dfd0ef2c5a50d530afd8d5`, about 3× slower) writes Hindi in **Devanagari** nearly correctly. Neither handles Hindi-English code-switching. Use `small` for Hindi (`scripts/download-speech-model.sh small`); no code change is needed.
+
+### 26.2 Runtime and setup
+
+`whisper-cli` is spawned as a child process through the same hardened runner as FFmpeg: `spawn` with an argument array, `shell:false`, minimal environment, closed stdin, killed on abort. The only inputs on its command line are the server-generated audio path, the configured model path, a validated language code (`^[a-z]{2,3}$` or automatic) and fixed flags; **no user text, transcript or filter phrase ever reaches a command**. Output goes to a private temp directory (JSON) that is always deleted; stdout/stderr are discarded; the output file is size-capped. A corrupt audio file makes whisper.cpp exit 0 **without writing output**, which the adapter treats as `unsupported-audio`. Each job loads the model afresh (about 0.3 s for `base`); a resident server process is a later optimisation.
+
+Setup: `brew install whisper-cpp` (installs `whisper-cli`), `scripts/download-speech-model.sh`, then in `.env`: `SAFEWATCH_SPEECH_PROVIDER=whispercpp`, `SAFEWATCH_SPEECH_MODEL_PATH=models/ggml-base.bin`. `models/` is git-ignored. If the binary or model is missing the server still starts, reports `speech.available: false` in `/api/health`, and collects subtitle evidence only.
+
+### 26.3 Audio track selection policy
+
+Input is the `AudioAsset` produced by extraction; the speech layer never extracts audio. Candidates are tracks with a stored file (bit-identical duplicates are listed as `duplicate`). Ranking, highest priority first: (1) language: matches the configured language, then unknown, then other (only when a language is configured; container tags such as `eng` map to `en`); (2) the container's default track; (3) not a commentary / hearing-impaired track; (4) container order. `SAFEWATCH_SPEECH_MAX_TRACKS` (default 1) tracks are transcribed; **every other track is listed with a reason** (`not-selected`, `duplicate`, `speech-disabled`), never dropped silently. Each result carries the track id, stream index and container language.
+
+### 26.4 Transcript model and timestamps
+
+`Transcript { mediaId, audioTrackId, streamIndex, language, languageConfidence, durationSeconds, segments[], hasWordTimestamps, wordTiming, provider, issues[] }`; a segment is `{ index, startSeconds, endSeconds, text, originalText, confidence, words[]|null }`; a word is `{ startSeconds, endSeconds, text, confidence }`.
+
+- **Unit and precision:** media time in seconds, rounded to whole milliseconds (the engine reports 10 ms steps). No frame numbers anywhere.
+- **Normalisation (deterministic):** NFC, control/zero-width/bidi characters removed, whitespace collapsed; the provider's text is kept as `originalText` only when it differed. Segments with missing, non-finite, negative or inverted times are dropped and counted; empty segments and exact duplicates are dropped; overlapping segments are kept untouched and counted; word lists that are out of order or outside their segment are discarded for that segment (`words: null`, counted). Words, casing and punctuation are never "corrected".
+- **Confidence:** the mean of the engine's token probabilities for the word or segment. It is a model probability, not a calibrated confidence, and is `null` when the provider supplied none. Subtitles have no confidence.
+- **Language:** the detected language (two-letter code) is recorded per transcript. Speech is never translated. Whisper reports one language per track.
+- **Word timing basis (`wordTiming`):** `alignment` uses whisper.cpp's DTW alignment (`-dtw <preset> -nfa`); `decoder` uses the engine's own token times. **Measured on a clip with known ground truth** (2.0 s of leading silence, then speech, a 1.5 s pause, more speech): without DTW the first word was placed at 0.00 s (**2.0 s early**); with DTW the first word started at 2.08 s and the second sentence at 5.40 s vs a true 5.32 s (errors ≈ +0.08 s). DTW is therefore the default. **Word START times are the reliable part. A word's END is an upper bound** (the next word's start; the last word of a segment is capped at +1.0 s), and neighbouring words can share a start time. Do not use word ends as exact mute boundaries without further work.
+
+### 26.5 Text events, alignment and custom filters
+
+- **TextEvent** (`source: speech | subtitle`, start, end, text, language, trackId, confidence, words, evidence) is the common shape; subtitle events come from the extraction cues of **text** tracks only (image and failed tracks contribute none).
+- **Alignment** is deterministic and conservative: a speech event and subtitle cue(s) are linked only if they are within 1 s in time, in compatible languages (by primary language; `eng` = `en`), and their words overlap (Dice similarity ≥ 0.6). It compares a speech event with all nearby cues together (cues split sentences) and a cue with several speech segments. Result per event: `both`, `speech-only` or `subtitle-only`. *No link means "not corroborated", never "wrong"*. No semantic AI.
+- **CustomFilter** `{ id, phrase, normalizedPhrase, matchMode, enabled, createdAt }`. **Normalisation for matching:** NFKC, control/zero-width/bidi removed, curly quotes/apostrophes straightened, whitespace collapsed, optional lower-casing; punctuation is dropped by word tokenisation (inner apostrophes kept); diacritics are **not** stripped (“résumé” ≠ “resume”) and non-Latin scripts are preserved. **Modes:** `exact` (case-sensitive substring), `case-insensitive` (substring, may match inside words), `word-boundary` (whole words, case-insensitive), `phrase` (whole words ignoring spacing/punctuation between them, so “SafeWatch” matches the speech model's “safe watch”).
+- **TextMatch** `{ filterId, phrase, source, trackId, eventId, startSeconds, endSeconds, matchedText, confidence, granularity (word|segment|cue), matchMode }`: word-level times when word timestamps exist, otherwise the whole segment/cue (honestly labelled). Confidence is the lowest known confidence of the matched words, `null` if unknown or for subtitles. Matching is pure, bounded (10,000 matches) and treats phrases as plain text (no regular expressions are built from user input). Filters live in the user's browser (localStorage) and matching runs there; filters are never sent to the server.
+- **Not implemented:** muting, beeping, blurring, censoring, subtitle replacement, scene skipping, scoring, any "safe/unsafe" verdict. Matches are evidence the future filtering engine will consume.
+
+### 26.6 Lifecycle, API, limits
+
+`TextAnalysis { status: not_started | queued | processing | ready | failed, phase: preparing | speech-processing | building-timeline }` runs after extraction completes, on its own bounded queue (default 1 job, queue of 20). `ready` means "text evidence is available", not "analysis is complete"; the safety `analysis` state stays `not_started`. A failed track (provider error, timeout, limit, unsupported audio) fails **that track only**, with a structured code, and the rest of the evidence is kept; the whole analysis fails only for queue overflow, cancellation or an internal error. `GET /api/media/:id/transcript` returns the `TextAnalysis` (`?words=false` omits word timestamps); `GET /api/media/:id` carries `text: {status, phase}`; `/api/health` reports `speech: {provider, available}` only.
+
+| Limit | Default | On breach |
+| --- | --- | --- |
+| Per-track transcription timeout | 10 min | engine killed, track `failed: timeout` |
+| Audio duration per track | 3600 s | track `failed: resource-limit`, engine not started |
+| Audio size per track | 256 MB | same |
+| Concurrent transcriptions | 1 (queue of 20) | beyond the queue: text analysis `failed: server-busy` |
+| Tracks per media | 1 | others listed as `not-selected` |
+| Transcript size | 20,000 segments, 2,000 characters per segment, 64 MB engine output | truncated and counted / `resource-limit` |
+
+Cancellation: deleting media or expiry aborts the in-flight transcription (the engine process is killed, its temp directory removed) before the media is removed. A restart discards all transcripts with the media (in-memory, same retention).
+
+### 26.7 Privacy
+
+- **Where audio is processed:** on the SafeWatch server machine, by a local whisper.cpp process. **Audio is not sent to any third party**; the engine has no network access requirement and none is used (the model is a local file). The only network use is the one-time model download from Hugging Face by the developer.
+- **Where transcripts live:** in server memory (inside the media record) and in API responses; never logged (logs hold counts, durations, ids and codes only). Subtitle text likewise. **One exception on disk:** whisper.cpp writes its result JSON (containing the transcript) into a private temp directory (created with mode 0700, verified by a test) which is deleted as soon as the adapter has read it and on every failure/abort path; if the server crashes mid-run that directory can survive until the next start, when stale `sw-whisper-*` directories older than an hour are swept. Audio itself is read in place from the media's extraction directory and is not copied.
+- **Retention:** the media's 60-minute clock; deleting or expiring media deletes its transcripts and timeline, and aborts transcription in progress. The engine's temporary JSON is deleted immediately after each run.
+- **Browser:** custom filters are stored in the visitor's own browser; transcripts are fetched on demand and are not persisted by the page.
+- **Not claimed:** the machine hosting SafeWatch can read whatever it processes; encryption at rest, access control and per-user isolation do not exist yet (no authentication).

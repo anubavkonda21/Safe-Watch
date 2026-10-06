@@ -5,6 +5,7 @@ import { MediaIngestionError, type MediaErrorCode } from '@/domain/media/errors'
 import { containerMatchesExtension, sanitizeFilename, validateMediaFile } from '@/domain/media/validation';
 import type { MediaResource } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
+import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
@@ -19,6 +20,8 @@ export interface MediaServiceDeps {
   queue: ProcessingQueue;
   /** Optional: when present, extraction is scheduled as soon as media is ready and cancelled before media is deleted. */
   extraction?: ExtractionScheduler;
+  /** Optional: text analysis is cancelled before media is deleted. */
+  textAnalysis?: { cancel(mediaId: string): void };
   logger: Logger;
   limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number };
   now?: () => number;
@@ -138,9 +141,26 @@ export class MediaService {
     return record.extraction;
   }
 
+  /** Speech transcripts and subtitle timeline (text evidence). Contains no paths, provider output or credentials. */
+  getTextAnalysis(id: string, options: { words?: boolean } = {}): TextAnalysis {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record) throw new MediaServiceError('NOT_FOUND');
+    if (options.words === false) {
+      // Word timing can be large; omit it on request.
+      const strip = <T extends { words: unknown }>(x: T) => ({ ...x, words: null });
+      return {
+        ...record.text,
+        speech: record.text.speech.map((s) => (s.transcript ? { ...s, transcript: { ...s.transcript, segments: s.transcript.segments.map(strip) } } : s)),
+        timeline: record.text.timeline.map(strip),
+      };
+    }
+    return record.text;
+  }
+
   async delete(id: string): Promise<void> {
     if (!isMediaId(id)) return;
     this.deps.extraction?.cancel(id);
+    this.deps.textAnalysis?.cancel(id);
     this.deps.repository.delete(id);
     await this.safeDelete(id);
     this.deps.logger.info('media deleted', { op: 'delete', mediaId: id });
@@ -151,6 +171,7 @@ export class MediaService {
     const expired = this.deps.repository.expired(this.now());
     for (const record of expired) {
       this.deps.extraction?.cancel(record.asset.id);
+      this.deps.textAnalysis?.cancel(record.asset.id);
       this.deps.repository.delete(record.asset.id);
       await this.safeDelete(record.asset.id);
     }

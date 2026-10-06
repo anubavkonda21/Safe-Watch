@@ -10,12 +10,14 @@ import { formatBytes, formatDuration } from '@/domain/media/format';
 import { isBusy, type ProcessingPhase } from '@/domain/media/ingestion';
 import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
+import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import { ACCEPTED_VIDEO_EXTENSIONS } from '@/domain/media/validation';
 import { config } from '@/infrastructure/config/env';
 import { defaultMediaIngestion } from '@/infrastructure/mediaIngestionFactory';
 import { cn } from '@/lib/cn';
 import { errorCopy } from './errorCopy';
 import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
+import { TextBadge, TranscriptPanel } from './TranscriptPanel';
 import { useMediaIngestion } from './useMediaIngestion';
 import './upload.css';
 
@@ -122,6 +124,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
           uploadFraction={state.status === 'processing' ? state.uploadFraction : null}
           analysis={state.status === 'ready' ? state.analysis : null}
           extraction={state.status === 'ready' ? state.extraction : null}
+          textAnalysis={state.status === 'ready' ? state.textAnalysis : null}
           mode={ingestion.mode}
           onReplace={openPicker}
         />
@@ -154,11 +157,12 @@ interface AssetSummaryProps {
   uploadFraction: number | null;
   analysis: AnalysisStatus | null;
   extraction: MediaExtraction | null;
+  textAnalysis: TextAnalysis | null;
   mode: 'local' | 'server';
   onReplace: () => void;
 }
 
-function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, mode, onReplace }: AssetSummaryProps) {
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, mode, onReplace }: AssetSummaryProps) {
   const m = asset.metadata;
   const ready = status === 'ready';
   const uploading = status === 'processing' && phase === 'uploading';
@@ -196,6 +200,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
         <div className="sw-upload__status" aria-label="Status">
           <Badge tone="success">Media: ready</Badge>
           {mode === 'server' && <ExtractionBadge extraction={extraction} />}
+          {mode === 'server' && extraction?.status === 'completed' && <TextBadge analysis={textAnalysis} />}
           <Badge tone="neutral">Analysis: {ANALYSIS_LABEL[analysis ?? 'not_started'].toLowerCase()}</Badge>
         </div>
       )}
@@ -207,6 +212,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
         </div>
       )}
       {ready && mode === 'server' && <ExtractionPanel extraction={extraction} />}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <TranscriptPanel analysis={textAnalysis} />}
       {ready && (
         <div className="sw-upload__alert">
           <Alert tone="info" title={mode === 'server' ? 'Stored temporarily' : 'Analysis has not started'}>

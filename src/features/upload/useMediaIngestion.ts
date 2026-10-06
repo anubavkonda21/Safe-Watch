@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { MediaIngestion } from '@/application/mediaIngestion';
+import { unavailableTextAnalysis, type TextAnalysisIssueCode } from '@/domain/text/textAnalysis';
 import { unavailableExtraction, type ExtractionErrorCode } from '@/domain/extraction/extraction';
 import type { MediaAsset } from '@/domain/media/asset';
 import { MediaIngestionError } from '@/domain/media/errors';
@@ -11,6 +12,14 @@ function extractionCodeFor(error: unknown): ExtractionErrorCode {
     if (error.code === 'server-unreachable') return 'server-unreachable';
   }
   return 'extraction-failed';
+}
+
+function textCodeFor(error: unknown): TextAnalysisIssueCode {
+  if (error instanceof MediaIngestionError) {
+    if (error.code === 'timeout') return 'timeout';
+    if (error.code === 'server-unreachable') return 'server-unreachable';
+  }
+  return 'provider-failed';
 }
 
 /**
@@ -62,8 +71,20 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
         });
         // The returned manifest is authoritative even if the port never reported it through onUpdate.
         if (final && live()) dispatch({ type: 'extraction', extraction: final });
+        if (!final || final.status !== 'completed') return; // text analysis only follows a completed extraction
       } catch (error) {
         if (live()) dispatch({ type: 'extraction', extraction: unavailableExtraction(ready.id, new Date().toISOString(), extractionCodeFor(error)) });
+        return;
+      }
+
+      // Text evidence (speech transcript + subtitle timeline) is the next, separate step.
+      try {
+        const text = await ingestion.analyzeText(ready, {
+          onUpdate: (textAnalysis) => { if (live()) dispatch({ type: 'text-analysis', textAnalysis }); },
+        });
+        if (text && live()) dispatch({ type: 'text-analysis', textAnalysis: text });
+      } catch (error) {
+        if (live()) dispatch({ type: 'text-analysis', textAnalysis: unavailableTextAnalysis(ready.id, new Date().toISOString(), textCodeFor(error)) });
       }
     },
     [ingestion],

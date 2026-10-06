@@ -18,6 +18,27 @@ export interface ExtractionConfig {
   maxSubtitleBytes: number;
 }
 
+export interface SpeechConfig {
+  /** `none`: no speech-to-text (subtitle evidence is still collected). */
+  provider: 'none' | 'whispercpp';
+  binaryPath: string;
+  /** Path of the model file. Server-side only; never exposed through the API. */
+  modelPath: string | null;
+  /** Display name of the model (derived from the file name; no path). */
+  modelName: string;
+  /** `auto` = detect the spoken language; otherwise an ISO 639-1 code to force (also the preferred audio-track language). */
+  language: string;
+  /** Wall-clock limit per transcribed audio track. */
+  timeoutMs: number;
+  maxAudioBytes: number;
+  maxDurationSeconds: number;
+  maxConcurrent: number;
+  maxQueued: number;
+  /** How many audio tracks to transcribe per media item. */
+  maxTracks: number;
+  threads: number;
+}
+
 export interface ServerConfig {
   environment: 'development' | 'production' | 'test';
   host: string;
@@ -38,6 +59,7 @@ export interface ServerConfig {
   ffmpegPath: string;
   ffprobePath: string;
   extraction: ExtractionConfig;
+  speech: SpeechConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 }
 
@@ -70,6 +92,28 @@ function origins(env: Env): string[] {
     }
     return url.origin;
   });
+}
+
+function speech(env: Env): SpeechConfig {
+  const provider = oneOf(env, 'SAFEWATCH_SPEECH_PROVIDER', ['none', 'whispercpp'] as const, 'none');
+  const modelPath = env.SAFEWATCH_SPEECH_MODEL_PATH?.trim() || null;
+  if (provider === 'whispercpp' && !modelPath) throw new Error('SAFEWATCH_SPEECH_MODEL_PATH is required when SAFEWATCH_SPEECH_PROVIDER=whispercpp.');
+  const language = (env.SAFEWATCH_SPEECH_LANGUAGE?.trim() || 'auto').toLowerCase();
+  if (language !== 'auto' && !/^[a-z]{2,3}$/.test(language)) throw new Error(`Invalid SAFEWATCH_SPEECH_LANGUAGE "${language}": expected "auto" or a language code such as "en" or "hi".`);
+  return {
+    provider,
+    binaryPath: env.SAFEWATCH_SPEECH_BINARY?.trim() || 'whisper-cli',
+    modelPath,
+    modelName: modelPath ? (modelPath.split(/[\\/]/).pop() ?? '').replace(/\.bin$/, '') || 'model' : 'none',
+    language,
+    timeoutMs: int(env, 'SAFEWATCH_SPEECH_TIMEOUT_MS', 10 * 60_000, 1000, 6 * 60 * 60_000),
+    maxAudioBytes: int(env, 'SAFEWATCH_SPEECH_MAX_AUDIO_MB', 256, 1, 4096) * 1024 * 1024,
+    maxDurationSeconds: int(env, 'SAFEWATCH_SPEECH_MAX_DURATION_SECONDS', 3600, 1, 6 * 3600),
+    maxConcurrent: int(env, 'SAFEWATCH_MAX_CONCURRENT_SPEECH', 1, 1, 4),
+    maxQueued: int(env, 'SAFEWATCH_MAX_QUEUED_SPEECH', 20, 0, 1000),
+    maxTracks: int(env, 'SAFEWATCH_SPEECH_MAX_TRACKS', 1, 1, 8),
+    threads: int(env, 'SAFEWATCH_SPEECH_THREADS', 4, 1, 32),
+  };
 }
 
 /** Parses and validates server configuration. Throws on invalid values so misconfiguration fails at startup. */
@@ -105,6 +149,7 @@ export function parseServerConfig(env: Env): ServerConfig {
       maxCues: int(env, 'SAFEWATCH_SUBTITLE_MAX_CUES', 50_000, 1, 500_000),
       maxSubtitleBytes: int(env, 'SAFEWATCH_SUBTITLE_MAX_MB', 8, 1, 256) * 1024 * 1024,
     },
+    speech: speech(env),
     ffmpegPath: env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg',
     ffprobePath: env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe',
     logLevel: oneOf(env, 'SAFEWATCH_LOG_LEVEL', ['debug', 'info', 'warn', 'error', 'silent'] as const, 'info'),

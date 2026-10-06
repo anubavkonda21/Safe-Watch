@@ -108,6 +108,14 @@ export class LocalDiskMediaStorage implements MediaStorage {
     return p;
   }
 
+  async withArtifactFile<T>(id: string, artifact: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T> {
+    await this.init();
+    const path = this.artifactPath(id, artifact);
+    const info = await stat(path).catch(() => null);
+    if (!info?.isFile()) throw new StorageError('not-found');
+    return fn({ path });
+  }
+
   readArtifact(id: string, artifact: string): AsyncIterable<Uint8Array> {
     return createReadStream(this.artifactPath(id, artifact));
   }

@@ -18,7 +18,7 @@ describe('GET /api/health', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     const body = (await res.json()) as HealthResponse;
-    expect(body).toEqual({ status: 'ok', service: 'safewatch-api', version: '0.0.0-test', environment: 'test', tools: { ffmpeg: true, ffprobe: true } });
+    expect(body).toEqual({ status: 'ok', service: 'safewatch-api', version: '0.0.0-test', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false } });
     expect(JSON.stringify(body)).not.toContain(app.storageDir);
   });
   it('is degraded when tools are missing', async () => {

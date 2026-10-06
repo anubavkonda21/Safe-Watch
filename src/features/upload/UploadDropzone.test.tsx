@@ -7,6 +7,8 @@ import { MediaIngestionError } from '@/domain/media/errors';
 import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
+import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
+import { filtersStore } from '@/features/filters/filtersStore';
 import { unavailableExtraction } from '@/domain/extraction/extraction';
 import { UploadDropzone } from './UploadDropzone';
 
@@ -156,9 +158,9 @@ describe('UploadDropzone with a server uploader', () => {
     const uploader: MediaUploader = {
       upload: (_f, h) => new Promise((resolve) => {
         progress = (n) => h?.onProgress?.(n);
-        finish = () => resolve({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } });
+        finish = () => resolve({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } });
       }),
-      waitForExtraction: neverSettles, remove: vi.fn(async () => undefined),
+      waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn(async () => undefined),
     };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
@@ -185,7 +187,7 @@ describe('UploadDropzone with a server uploader', () => {
   });
 
   it('never shows a fabricated percentage before real progress arrives', async () => {
-    const uploader: MediaUploader = { upload: () => new Promise(() => undefined), waitForExtraction: neverSettles, remove: vi.fn(async () => undefined) };
+    const uploader: MediaUploader = { upload: () => new Promise(() => undefined), waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn(async () => undefined) };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'processing'));
@@ -201,7 +203,7 @@ describe('UploadDropzone with a server uploader', () => {
     ['timeout', 'Preparing took too long', /try again/i],
     ['storage-failure', 'We could not store this video', /try again/i],
   ] as const)('maps server failure %s to readable copy', async (code, title, body) => {
-    const uploader: MediaUploader = { upload: async () => { throw new MediaIngestionError(code); }, waitForExtraction: neverSettles, remove: vi.fn(async () => undefined) };
+    const uploader: MediaUploader = { upload: async () => { throw new MediaIngestionError(code); }, waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn(async () => undefined) };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(title));
@@ -211,7 +213,7 @@ describe('UploadDropzone with a server uploader', () => {
 
   it('releases the previous server upload when the user chooses a different video', async () => {
     const remove = vi.fn(async () => undefined);
-    const uploader: MediaUploader = { upload: async () => ({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } }), waitForExtraction: neverSettles, remove };
+    const uploader: MediaUploader = { upload: async () => ({ asset: serverAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } }), waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove };
     render(<UploadDropzone ingestion={createMediaIngestion({ uploader, maxBytes: 10 * MB })} />);
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
@@ -227,8 +229,8 @@ describe('UploadDropzone extraction (analysis assets) — separate from upload',
   });
   const withExtraction = (waitForExtraction: MediaUploader['waitForExtraction']) => {
     const uploader: MediaUploader = {
-      upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null } }),
-      waitForExtraction, remove: vi.fn(async () => undefined),
+      upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } }),
+      waitForExtraction, waitForTextAnalysis: neverSettles, remove: vi.fn(async () => undefined),
     };
     return createMediaIngestion({ uploader, maxBytes: 10 * MB });
   };
@@ -369,5 +371,69 @@ describe('UploadDropzone extraction (analysis assets) — separate from upload',
     await waitFor(() => expect(group()).toHaveAttribute('data-state', 'ready'));
     expect(screen.queryByRole('region', { name: 'Analysis assets' })).not.toBeInTheDocument();
     expect(screen.queryByText(/Extraction:/)).not.toBeInTheDocument();
+  });
+});
+
+describe('UploadDropzone text evidence (transcript) — a separate step after extraction', () => {
+  const readyAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: ffprobeMeta, createdAt: 'x', failure: null,
+  });
+  const ingestionWith = (text: MediaUploader['waitForTextAnalysis'], extraction: MediaUploader['waitForExtraction'] = async (id) => completedExtraction(id)) =>
+    createMediaIngestion({
+      uploader: { upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } }), waitForExtraction: extraction, waitForTextAnalysis: text, remove: vi.fn(async () => undefined) },
+      maxBytes: 10 * MB,
+    });
+
+  it('starts only after extraction completed, shows phases, then the transcript, with Analysis still NOT started', async () => {
+    window.localStorage.clear(); filtersStore.reload();
+    let push!: (t: ReturnType<typeof processingTextAnalysis>) => void;
+    let finish!: () => void;
+    render(<UploadDropzone ingestion={ingestionWith((id, hooks) => new Promise((resolve) => {
+      push = (t) => hooks?.onUpdate?.(t);
+      finish = () => { const done = readyTextAnalysis(id); hooks?.onUpdate?.(done); resolve(done); };
+    }))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Media prepared. Ready for SafeWatch analysis.');
+    expect(screen.getByText('Text: queued')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Transcript' })).toHaveTextContent('Waiting to transcribe…');
+    act(() => push(processingTextAnalysis('srv-1', 'speech-processing')));
+    expect(screen.getByText('Text: in progress')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Transcript' })).toHaveTextContent('Transcribing speech…');
+    await act(async () => finish());
+    expect(await screen.findByText('Text: ready')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Transcript' })).toHaveTextContent('Subtitles2 cues');
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+    // It must never CLAIM safety (the disclaimer "has not judged whether anything is safe" is the opposite of a claim).
+    expect(document.body.textContent).not.toMatch(/(video|media|content) (is|are) (safe|unsafe)|analysis (is )?complete|\bunsafe\b/i);
+  });
+
+  it('does not start text analysis when extraction failed', async () => {
+    const text = vi.fn(async () => readyTextAnalysis('srv-1'));
+    render(<UploadDropzone ingestion={ingestionWith(text, async (id) => unavailableExtraction(id, 'x', 'timeout'))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('took too long'));
+    expect(text).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: 'Transcript' })).not.toBeInTheDocument();
+  });
+
+  it('a failure of the text step is its own error and leaves media ready and extraction completed', async () => {
+    render(<UploadDropzone ingestion={ingestionWith(async () => { throw new MediaIngestionError('server-unreachable'); })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Transcript' })).toHaveTextContent('We lost contact with the SafeWatch server'));
+    expect(screen.getByText('Text: failed')).toBeInTheDocument();
+    expect(screen.getByText('Extraction: completed')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+  });
+
+  it('shows matches for the user’s custom filters inside the transcript', async () => {
+    window.localStorage.clear(); filtersStore.reload();
+    filtersStore.add('SafeWatch', 'phrase');
+    render(<UploadDropzone ingestion={ingestionWith(async (id) => readyTextAnalysis(id))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await screen.findByText('Text: ready');
+    const rows = screen.getAllByRole('listitem').filter((li) => li.className.includes('sw-match'));
+    expect(rows).toHaveLength(2);
   });
 });
