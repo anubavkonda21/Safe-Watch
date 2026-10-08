@@ -33,7 +33,7 @@ const quiet = { debug() {}, info: (m: string, f?: object) => logs.push(m + ' ' +
 const storage = new LocalDiskMediaStorage(storageDir);
 const limits = { maxUploadBytes: 8 * 1024 * MB, maxConcurrentUploads: 4, processingTimeoutMs: 120_000, retentionMs: 3_600_000 };
 const service = new MediaService({ storage, repository: new InMemoryMediaRepository(), processor: new FfmpegMediaProcessor(ffmpeg), queue: new ProcessingQueue(2, 10), logger: quiet, limits });
-const server = createApiServer({ mediaService: service, logger: quiet, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false } } });
+const server = createApiServer({ mediaService: service, logger: quiet, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false }, vision: { provider: 'none', available: false } } });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const port = (server.address() as AddressInfo).port;
 

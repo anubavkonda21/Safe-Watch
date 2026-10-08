@@ -1,6 +1,7 @@
 import type { MediaAsset } from './asset';
 import { PENDING_METADATA } from './asset';
 import { createExtraction } from '../extraction/extraction';
+import { createVisualAnalysis } from '../vision/visualAnalysis';
 import { createTextAnalysis } from '../text/textAnalysis';
 import { MediaIngestionError } from './errors';
 import { initialIngestionState, ingestionReducer, isBusy, type IngestionEvent, type IngestionState } from './ingestion';
@@ -69,6 +70,16 @@ describe('ingestionReducer', () => {
     expect(run([{ type: 'text-analysis', textAnalysis: { ...ta, mediaId: 'other' } }], ready)).toBe(ready);
     expect(run([{ type: 'text-analysis', textAnalysis: ta }])).toBe(initialIngestionState);
     expect(run([{ type: 'select', fileName: 'y' }], withText)).toEqual({ status: 'validating', fileName: 'y' });
+  });
+  it('visual analysis attaches to the ready asset only, independently of text analysis, and is dropped on a new selection', () => {
+    const ready = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }]);
+    expect(ready).toMatchObject({ visual: null });
+    const v = createVisualAnalysis('a1', 'now');
+    const withVisual = run([{ type: 'visual-analysis', visual: v }], ready);
+    expect(withVisual).toMatchObject({ status: 'ready', visual: { mediaId: 'a1' }, textAnalysis: null });
+    expect(run([{ type: 'visual-analysis', visual: { ...v, mediaId: 'other' } }], ready)).toBe(ready);
+    expect(run([{ type: 'visual-analysis', visual: v }])).toBe(initialIngestionState);
+    expect(run([{ type: 'select', fileName: 'y' }], withVisual)).toEqual({ status: 'validating', fileName: 'y' });
   });
   it('a new selection discards the previous extraction', () => {
     const ex = { ...createExtraction('a1', 'now'), status: 'completed' as const };

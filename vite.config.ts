@@ -22,7 +22,7 @@ export default defineConfig({
       },
       {
         extends: true,
-        test: { name: 'server', environment: 'node', globals: true, include: ['server/**/*.test.ts'], testTimeout: 30_000 },
+        test: { name: 'server', environment: 'node', globals: true, include: ['server/**/*.test.ts'], testTimeout: 30_000, globalSetup: ['./server/test/globalSetup.ts'] },
       },
     ],
   },

@@ -6,6 +6,7 @@ import { containerMatchesExtension, sanitizeFilename, validateMediaFile } from '
 import type { MediaResource } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
@@ -22,6 +23,8 @@ export interface MediaServiceDeps {
   extraction?: ExtractionScheduler;
   /** Optional: text analysis is cancelled before media is deleted. */
   textAnalysis?: { cancel(mediaId: string): void };
+  /** Optional: visual analysis is cancelled before media is deleted. */
+  visualAnalysis?: { cancel(mediaId: string): void };
   logger: Logger;
   limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number };
   now?: () => number;
@@ -157,10 +160,28 @@ export class MediaService {
     return record.text;
   }
 
+  getVisualAnalysis(id: string, options: { observations?: boolean } = {}): VisualAnalysis {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record) throw new MediaServiceError('NOT_FOUND');
+    return options.observations === false ? { ...record.visual, observations: [] } : record.visual;
+  }
+
+  /**
+   * A sampled frame, by its manifest id. Only ids listed in the extraction manifest resolve;
+   * the client never supplies a path or an artifact name.
+   */
+  getFrame(id: string, frameId: string): { stream: AsyncIterable<Uint8Array>; sizeBytes: number } {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    const frame = record?.extraction.frames?.frames.find((f) => f.id === frameId);
+    if (!record || !frame) throw new MediaServiceError('NOT_FOUND');
+    return { stream: this.deps.storage.readArtifact(id, frame.artifact), sizeBytes: frame.sizeBytes };
+  }
+
   async delete(id: string): Promise<void> {
     if (!isMediaId(id)) return;
     this.deps.extraction?.cancel(id);
     this.deps.textAnalysis?.cancel(id);
+    this.deps.visualAnalysis?.cancel(id);
     this.deps.repository.delete(id);
     await this.safeDelete(id);
     this.deps.logger.info('media deleted', { op: 'delete', mediaId: id });
@@ -172,6 +193,7 @@ export class MediaService {
     for (const record of expired) {
       this.deps.extraction?.cancel(record.asset.id);
       this.deps.textAnalysis?.cancel(record.asset.id);
+      this.deps.visualAnalysis?.cancel(record.asset.id);
       this.deps.repository.delete(record.asset.id);
       await this.safeDelete(record.asset.id);
     }

@@ -1,6 +1,7 @@
 import type { AnalysisState } from '../analysis/job';
 import type { ExtractionState, MediaExtraction } from '../extraction/extraction';
 import type { TextAnalysis, TextAnalysisState } from '../text/textAnalysis';
+import type { VisualAnalysis, VisualState } from '../vision/visualAnalysis';
 import type { MediaAsset } from '../media/asset';
 import type { MediaErrorCode } from '../media/errors';
 
@@ -13,6 +14,8 @@ export const API_PATHS = {
   media: '/api/media',
   extraction: (id: string) => `/api/media/${encodeURIComponent(id)}/extraction`,
   transcript: (id: string) => `/api/media/${encodeURIComponent(id)}/transcript`,
+  visual: (id: string) => `/api/media/${encodeURIComponent(id)}/visual`,
+  frame: (id: string, frameId: string) => `/api/media/${encodeURIComponent(id)}/frames/${encodeURIComponent(frameId)}`,
 } as const;
 
 /** Original filename travels in a header (URI-encoded), never in the URL or as a path. */
@@ -43,7 +46,13 @@ export interface MediaResource {
   extraction: ExtractionState;
   /** Text evidence stage (speech transcript + subtitle timeline). Not a safety analysis. */
   text: TextAnalysisState;
+  /** Visual evidence stage (frame observations). Not a safety analysis. */
+  visual: VisualState;
   analysis: AnalysisState;
+}
+
+export interface VisualAnalysisResponse {
+  visualAnalysis: VisualAnalysis;
 }
 
 export interface TextAnalysisResponse {
@@ -66,6 +75,8 @@ export interface HealthResponse {
   tools: { ffmpeg: boolean; ffprobe: boolean };
   /** Speech-to-text engine availability. Never includes model names, paths or versions. */
   speech: { provider: string; available: boolean };
+  /** Visual-analysis engine availability. Never includes paths or versions. */
+  vision: { provider: string; available: boolean };
 }
 
 export function isApiErrorCode(value: unknown): value is ApiErrorCode {

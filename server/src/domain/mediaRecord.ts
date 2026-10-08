@@ -1,6 +1,7 @@
 import { NOT_STARTED, type AnalysisState } from '@/domain/analysis/job';
 import { createExtraction, toExtractionState, type MediaExtraction } from '@/domain/extraction/extraction';
 import { createTextAnalysis, toTextAnalysisState, type TextAnalysis } from '@/domain/text/textAnalysis';
+import { createVisualAnalysis, toVisualState, type VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import type { MediaResource } from '@/domain/api/contract';
 import type { MediaAsset, MediaAssetStatus, MediaMetadata } from '@/domain/media/asset';
 import type { MediaErrorCode } from '@/domain/media/errors';
@@ -10,6 +11,7 @@ export interface MediaRecord {
   asset: MediaAsset;
   extraction: MediaExtraction;
   text: TextAnalysis;
+  visual: VisualAnalysis;
   analysis: AnalysisState;
   /** Epoch milliseconds after which the record and its file are discarded. */
   expiresAt: number;
@@ -40,6 +42,7 @@ export const createUploadedRecord = (asset: MediaAsset, now: number, retentionMs
   asset: { ...asset, status: 'uploaded' },
   extraction: createExtraction(asset.id, new Date(now).toISOString()),
   text: createTextAnalysis(asset.id, new Date(now).toISOString()),
+  visual: createVisualAnalysis(asset.id, new Date(now).toISOString()),
   analysis: NOT_STARTED,
   expiresAt: now + retentionMs,
 });
@@ -48,4 +51,4 @@ export const markProcessing = (r: MediaRecord): MediaRecord => move(r, 'processi
 export const markReady = (r: MediaRecord, metadata: MediaMetadata): MediaRecord => move(r, 'ready', { metadata });
 export const markFailed = (r: MediaRecord, code: MediaErrorCode): MediaRecord => move(r, 'failed', { failure: { code } });
 
-export const toResource = (r: MediaRecord): MediaResource => ({ asset: r.asset, extraction: toExtractionState(r.extraction), text: toTextAnalysisState(r.text), analysis: r.analysis });
+export const toResource = (r: MediaRecord): MediaResource => ({ asset: r.asset, extraction: toExtractionState(r.extraction), text: toTextAnalysisState(r.text), visual: toVisualState(r.visual), analysis: r.analysis });

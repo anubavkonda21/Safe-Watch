@@ -3,12 +3,14 @@ import { PENDING_METADATA, type MediaAsset } from '@/domain/media/asset';
 import { HttpMediaUploader } from './httpMediaUploader';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
+import { processingVisual, readyVisual } from '@/test/visualAnalysis';
+import { failVisual } from '@/domain/vision/visualAnalysis';
 
 const asset = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaAsset => ({
   id: 'srv-1', filename: 'a.mp4', mimeType: 'video/mp4', container: 'mp4', typeLabel: 'MP4 video', sizeBytes: 5,
   status, metadata: PENDING_METADATA, createdAt: 'x', failure: null, ...extra,
 });
-const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } });
+const resource = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaResource => ({ asset: asset(status, extra), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null } });
 
 class FakeXhr {
   static last: FakeXhr;
@@ -161,6 +163,44 @@ describe('HttpMediaUploader', () => {
       vi.stubGlobal('fetch', vi.fn(async () => respond(processingExtraction('srv-1', 'preparing'))));
       const ac = new AbortController();
       const p = make().waitForExtraction('srv-1', { signal: ac.signal });
+      ac.abort();
+      await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
+    });
+  });
+
+  describe('waitForVisualAnalysis', () => {
+    const respond = (v: unknown) => new Response(JSON.stringify({ visualAnalysis: v }), { status: 200 });
+    it('polls the slim form, reports each change once (including frame progress), then fetches the full result when ready', async () => {
+      const urls: string[] = [];
+      const seq = [
+        processingVisual('srv-1', 'analyzing-frames', { framesDone: 0, framesTotal: 4 }), processingVisual('srv-1', 'analyzing-frames', { framesDone: 0, framesTotal: 4 }),
+        processingVisual('srv-1', 'analyzing-frames', { framesDone: 2, framesTotal: 4 }), processingVisual('srv-1', 'building-timeline'), readyVisual('srv-1'), readyVisual('srv-1'),
+      ];
+      vi.stubGlobal('fetch', vi.fn(async (u: string) => { urls.push(u); return respond(seq.shift()); }));
+      const onUpdate = vi.fn();
+      const result = await make().waitForVisualAnalysis('srv-1', { onUpdate });
+      expect(result.status).toBe('ready');
+      expect(result.observations.length).toBeGreaterThan(0);
+      expect(onUpdate.mock.calls.map((c) => `${c[0].status}:${c[0].phase}:${c[0].progress?.framesDone ?? '-'}`)).toEqual(['processing:analyzing-frames:0', 'processing:analyzing-frames:2', 'processing:building-timeline:-', 'ready:null:-']);
+      expect(urls.slice(0, 5).every((u) => u.endsWith('/api/media/srv-1/visual?observations=false'))).toBe(true);
+      expect(urls.at(-1)).toBe('http://api.test/api/media/srv-1/visual');
+    });
+    it('returns a failed analysis as a value without a second request', async () => {
+      const f = vi.fn(async () => respond(failVisual(processingVisual('srv-1', 'preparing'), { code: 'server-busy', stage: 'queue', fatal: true, count: 0 }, 'x')));
+      vi.stubGlobal('fetch', f);
+      await expect(make().waitForVisualAnalysis('srv-1')).resolves.toMatchObject({ status: 'failed' });
+      expect(f).toHaveBeenCalledTimes(1);
+    });
+    it('times out, reports an unreachable server, maps gateway errors, and stops on abort', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingVisual('srv-1', 'preparing'))));
+      await expect(make({ extractionTimeoutMs: 30 }).waitForVisualAnalysis('srv-1')).rejects.toMatchObject({ code: 'timeout' });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+      await expect(make().waitForVisualAnalysis('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
+      await expect(make().waitForVisualAnalysis('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => respond(processingVisual('srv-1', 'preparing'))));
+      const ac = new AbortController();
+      const p = make().waitForVisualAnalysis('srv-1', { signal: ac.signal });
       ac.abort();
       await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
     });

@@ -1,7 +1,8 @@
 import type { MediaUploader, UploadHooks } from '@/application/mediaUploader';
-import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse, type TextAnalysisResponse } from '@/domain/api/contract';
+import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse, type TextAnalysisResponse, type VisualAnalysisResponse } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import { MediaIngestionError } from '@/domain/media/errors';
 import { sanitizeFilename } from '@/domain/media/validation';
 
@@ -92,6 +93,38 @@ export class HttpMediaUploader implements MediaUploader {
     }
   }
 
+  async waitForVisualAnalysis(mediaId: string, hooks: { onUpdate?: (v: VisualAnalysis) => void; signal?: AbortSignal } = {}): Promise<VisualAnalysis> {
+    const deadline = Date.now() + this.extractionTimeoutMs;
+    const url = `${this.options.baseUrl}${API_PATHS.visual(mediaId)}`;
+    let lastKey = '';
+    let failures = 0;
+    for (;;) {
+      if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
+      try {
+        // While waiting, ask for the slim form (no observations); fetch the full one once it is final.
+        const res = await fetch(`${url}?observations=false`, { signal: hooks.signal });
+        const body = parse(await res.text());
+        if (!res.ok || !isVisualResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
+        failures = 0;
+        const v = body.visualAnalysis;
+        const p = v.progress;
+        const key = `${v.status}|${v.phase}|${p ? `${p.framesDone}/${p.framesTotal}` : ''}`;
+        if (v.status === 'ready' || v.status === 'failed') {
+          const full = v.status === 'ready' ? await fetch(url, { signal: hooks.signal }).then(async (r) => parse(await r.text())) : body;
+          const result = isVisualResponse(full) ? full.visualAnalysis : v;
+          hooks.onUpdate?.(result);
+          return result;
+        }
+        if (key !== lastKey) { lastKey = key; hooks.onUpdate?.(v); }
+      } catch (e) {
+        if (e instanceof MediaIngestionError) throw e;
+        if (++failures >= 3) throw new MediaIngestionError('server-unreachable');
+      }
+      if (Date.now() > deadline) throw new MediaIngestionError('timeout');
+      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+    }
+  }
+
   async remove(mediaId: string): Promise<void> {
     try {
       await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(mediaId)}`, { method: 'DELETE', keepalive: true });
@@ -162,6 +195,10 @@ function isExtractionResponse(v: unknown): v is ExtractionResponse {
 
 function isTextAnalysisResponse(v: unknown): v is TextAnalysisResponse {
   return typeof v === 'object' && v !== null && 'textAnalysis' in v && typeof (v as { textAnalysis: { status?: unknown } }).textAnalysis?.status === 'string';
+}
+
+function isVisualResponse(v: unknown): v is VisualAnalysisResponse {
+  return typeof v === 'object' && v !== null && 'visualAnalysis' in v && typeof (v as { visualAnalysis: { status?: unknown } }).visualAnalysis?.status === 'string';
 }
 
 function isMediaResponse(v: unknown): v is MediaResponse {

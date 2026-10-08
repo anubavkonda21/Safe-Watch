@@ -387,3 +387,55 @@ Cancellation: deleting media or expiry aborts the in-flight transcription (the e
 - **Retention:** the media's 60-minute clock; deleting or expiring media deletes its transcripts and timeline, and aborts transcription in progress. The engine's temporary JSON is deleted immediately after each run.
 - **Browser:** custom filters are stored in the visitor's own browser; transcripts are fetched on demand and are not persisted by the page.
 - **Not claimed:** the machine hosting SafeWatch can read whatever it processes; encryption at rest, access control and per-user isolation do not exist yet (no authentication).
+
+---
+
+## 27. Visual intelligence (Checkpoint 5)
+
+Second AI inference in SafeWatch. It produces **visual evidence only**: what an image model reports about each sampled frame, and when. It never decides whether media is safe, and it never mutes, blurs, hides, skips or edits anything. There is no safety classification, no score and no verdict anywhere in the model, the API or the UI.
+
+```
+ MediaExtraction (completed)                                   shared pure domain (src/domain/{vision,evidence})
+   │ Frame { id, timestampSeconds, artifact }                   VisualObservation · normalizeObservation · compareObservations
+   ▼                                                            VisualAnalysis lifecycle · validateVisualAnalysis
+ VisualAnalysisService  (bounded queue, default 1 job)          EvidenceItem · buildEvidenceTimeline (text + visual on one timeline)
+   │ policy: limits, batches, timeouts, cancellation, isolation
+   ├─► VisualAnalysisProvider (port) ◄── AppleVisionProvider ──► safewatch-vision process ──► Apple Vision framework
+   │         raw per-frame observations (untrusted)
+   └─► normalizeObservation → sort → VisualAnalysis { frames, observations, counts, issues, metrics }
+```
+
+### 27.1 Provider evaluation (measured on this Apple Silicon Mac)
+
+| Option | Output | Footprint | Privacy | Verdict |
+| --- | --- | --- | --- | --- |
+| **Apple Vision** (system framework, Swift helper) | Labels with confidence, person/animal boxes, OCR with boxes | 169 KB helper, no model download, ~70 MB RSS while running | Fully local | **Chosen** |
+| ONNX Runtime (npm) + a model | Whatever the model gives | 145 to 301 MB of runtime before any weights | Local | Heavier; the right Linux adapter later |
+| llama.cpp vision-language model | Free text only; no confidences or boxes | Gigabytes of weights | Local | Not evidence-shaped |
+| CLIP-style embeddings | Similarity scores to prompts | ~350 MB | Local | Needs prompt lists: that is classification by another name |
+| YOLO family | Object boxes | Small | Local | AGPL licence |
+| Hosted vision API | Strong | None locally | **Frames leave the machine** | Rejected: privacy and cost |
+
+**Trade-offs, stated plainly:** macOS only, and the model is Apple's and closed (no weights to inspect or pin). The port is what keeps it replaceable. Observed quirks: a person was missed in a living-room photo; a pure black frame is labelled "outdoor / night sky" (0.51); OCR can crop edge characters; the label vocabulary is Apple's ("consumer_electronics", "wood_processed"). **Face detection and recognition are deliberately not used.**
+
+### 27.2 Contracts
+
+- `VisualObservation { id, frameId, frameIndex, timestampSeconds, type, label, confidence | null, region | null, attributes | null, provider, model }`. Types are only `classification`, `object`, `text`: there is no safety type. Time always comes from the frame (media time); providers never supply it. Confidence is the provider's own number or `null` (never invented, out-of-range becomes `null`). Regions are fractions of the image with a **top-left origin** (the helper converts from Vision's bottom-left); invalid regions are removed, the observation stays.
+- Order is total and deterministic: time, frame index, type (objects, text, labels), confidence (high first), label, id.
+- `VisualAnalysis` has its own lifecycle `not_started → queued → processing → ready | failed`, separate from media, extraction and text. `ready` means "visual observations are available". Every candidate frame is listed with `analyzed | failed | skipped` and a reason.
+- **Error taxonomy** (which layer failed): `frame-missing` (storage/extraction), `invalid-frame` (not a decodable JPEG/PNG), `inference-failed`, `provider-unavailable`, `timeout`, `cancelled`, `invalid-response` (provider output unusable), `resource-limit`, plus `no-frames`, `observations-dropped`, `server-busy`.
+- **Failure isolation:** one bad frame fails alone; a failed batch fails only its frames; if nothing could be analysed the stage fails with the dominant cause; media and extraction stay `ready/completed`.
+
+### 27.3 Unified evidence (decision)
+
+`src/domain/evidence` projects `TextEvent` (speech, subtitles) and `VisualObservation` into one `EvidenceItem` shape and one chronological list, so later stages can ask "what was said, written and shown around t". It is a pure projection: **nothing in the speech, subtitle or Custom Filter code changed, and nothing consumes it yet.** Custom Filters still match text only.
+
+### 27.4 Security and privacy
+
+Frames are untrusted media: the helper opens only JPEG/PNG (type checked by the image decoder), oversized frames are refused before decoding, a corrupt file fails alone. The helper is run with an argv array (no shell), frame paths are server-generated and passed after `--`, the environment is minimal, stdin is closed, stdout is capped, stderr is discarded and the process is killed on timeout or cancellation. Labels and OCR text are sanitised, rendered as text, never as HTML, and never logged. `/api/frames` serves only ids from the manifest, as `image/jpeg` with `nosniff` and `default-src 'none'`. Frames and observations live for the same retention window as the media; nothing is uploaded anywhere.
+
+**Unchanged production gates (NOT solved):** FFmpeg and helper process sandboxing, authentication/authorisation (media ids are bearer tokens, and frame images are reachable by id), rate limiting, disk quota.
+
+### 27.5 Performance baseline
+
+See `CHECKPOINT_5_REPORT.md`. Measured warm on this machine: about 36 ms per 640×480 frame, 300 frames in about 10.7 s of provider time, helper about 70 MB RSS. The first-ever run took about 26 s (system model compilation). These are small-frame, repeated-photo numbers, not a general benchmark.

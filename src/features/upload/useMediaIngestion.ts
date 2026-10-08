@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { MediaIngestion } from '@/application/mediaIngestion';
 import { unavailableTextAnalysis, type TextAnalysisIssueCode } from '@/domain/text/textAnalysis';
+import { unavailableVisual, type VisualIssue } from '@/domain/vision/visualAnalysis';
 import { unavailableExtraction, type ExtractionErrorCode } from '@/domain/extraction/extraction';
 import type { MediaAsset } from '@/domain/media/asset';
 import { MediaIngestionError } from '@/domain/media/errors';
@@ -20,6 +21,14 @@ function textCodeFor(error: unknown): TextAnalysisIssueCode {
     if (error.code === 'server-unreachable') return 'server-unreachable';
   }
   return 'provider-failed';
+}
+
+function visualCodeFor(error: unknown): VisualIssue['code'] {
+  if (error instanceof MediaIngestionError) {
+    if (error.code === 'timeout') return 'timeout';
+    if (error.code === 'server-unreachable') return 'server-unreachable';
+  }
+  return 'inference-failed';
 }
 
 /**
@@ -77,15 +86,29 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
         return;
       }
 
-      // Text evidence (speech transcript + subtitle timeline) is the next, separate step.
-      try {
-        const text = await ingestion.analyzeText(ready, {
-          onUpdate: (textAnalysis) => { if (live()) dispatch({ type: 'text-analysis', textAnalysis }); },
-        });
-        if (text && live()) dispatch({ type: 'text-analysis', textAnalysis: text });
-      } catch (error) {
-        if (live()) dispatch({ type: 'text-analysis', textAnalysis: unavailableTextAnalysis(ready.id, new Date().toISOString(), textCodeFor(error)) });
-      }
+      // Text and visual evidence are separate steps that run side by side on the server; each one's trouble stays its own.
+      const text = (async () => {
+        try {
+          const result = await ingestion.analyzeText(ready, {
+            onUpdate: (textAnalysis) => { if (live()) dispatch({ type: 'text-analysis', textAnalysis }); },
+          });
+          if (result && live()) dispatch({ type: 'text-analysis', textAnalysis: result });
+        } catch (error) {
+          if (live()) dispatch({ type: 'text-analysis', textAnalysis: unavailableTextAnalysis(ready.id, new Date().toISOString(), textCodeFor(error)) });
+        }
+      })();
+      const visual = (async () => {
+        try {
+          const result = await ingestion.analyzeVisual(ready, {
+            onUpdate: (v) => { if (live()) dispatch({ type: 'visual-analysis', visual: v }); },
+          });
+          // No visual support behind the port: say so instead of waiting forever.
+          if (live()) dispatch({ type: 'visual-analysis', visual: result ?? unavailableVisual(ready.id, new Date().toISOString(), 'provider-unavailable') });
+        } catch (error) {
+          if (live()) dispatch({ type: 'visual-analysis', visual: unavailableVisual(ready.id, new Date().toISOString(), visualCodeFor(error)) });
+        }
+      })();
+      await Promise.all([text, visual]);
     },
     [ingestion],
   );

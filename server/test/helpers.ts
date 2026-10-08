@@ -17,6 +17,10 @@ import { TextAnalysisService, type TextAnalysisLimits } from '../src/application
 import type { SpeechToTextProvider } from '../src/application/speechPorts';
 import { WhisperCppProvider } from '../src/infrastructure/speech/whisperCppProvider';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
+import { VisualAnalysisService, type VisualLimits } from '../src/application/visualAnalysisService';
+import type { VisualAnalysisProvider } from '../src/application/visualPorts';
+import { AppleVisionProvider } from '../src/infrastructure/vision/appleVisionProvider';
 import { MediaService } from '../src/application/mediaService';
 import type { Logger, ServerMediaProcessor } from '../src/application/ports';
 import { ProcessingQueue } from '../src/application/processingQueue';
@@ -40,6 +44,7 @@ export interface TestApp {
   service: MediaService;
   extraction?: MediaExtractionService;
   textAnalysis?: TextAnalysisService;
+  visualAnalysis?: VisualAnalysisService;
   repository: InMemoryMediaRepository;
   storage: LocalDiskMediaStorage;
   clock: { now: number };
@@ -61,7 +66,16 @@ export interface TestAppOptions {
   extraction?: { extractor?: MediaExtractor; limits?: Partial<ExtractionLimits>; maxConcurrent?: number; maxQueued?: number };
   /** Enables text analysis after extraction. `provider: null` = speech-to-text not configured (subtitle evidence only). Requires `extraction`. */
   speech?: { provider: SpeechToTextProvider | null; limits?: Partial<TextAnalysisLimits>; maxConcurrent?: number; maxQueued?: number };
+  /** Enables visual analysis after extraction. `provider: null` = not configured. Requires `extraction`. */
+  vision?: { provider: VisualAnalysisProvider | null; limits?: Partial<VisualLimits>; maxConcurrent?: number; maxQueued?: number };
 }
+
+export const defaultVisualLimits = (): VisualLimits => ({ timeoutMs: 120_000, maxFrames: 300, batchSize: 8, maxFrameBytes: 8 * 1024 * 1024, minConfidence: 0.1, maxLabelsPerFrame: 8, maxObservationsPerFrame: 64 });
+
+/** The real local vision helper (build: scripts/build-vision-helper.sh). Real-inference tests REQUIRE it on macOS (see globalSetup). */
+export const VISION_BINARY = new URL('../../bin/safewatch-vision', import.meta.url).pathname;
+export const realVision = new AppleVisionProvider({ binaryPath: VISION_BINARY });
+export const hasRealVision = await realVision.isAvailable();
 
 export const defaultSpeechLimits = (): TextAnalysisLimits => ({ language: 'auto', timeoutMs: 30_000, maxAudioBytes: 256 * 1024 * 1024, maxDurationSeconds: 3600, maxTracks: 1 });
 
@@ -105,16 +119,23 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
         limits: { ...defaultSpeechLimits(), ...opts.speech.limits },
       })
     : undefined;
+  const visualAnalysis = opts.extraction && opts.vision
+    ? new VisualAnalysisService({
+        storage, repository, logger, now: () => clock.now, provider: opts.vision.provider,
+        queue: new ProcessingQueue(opts.vision.maxConcurrent ?? 1, opts.vision.maxQueued ?? 10),
+        limits: { ...defaultVisualLimits(), ...opts.vision.limits },
+      })
+    : undefined;
   const extraction = opts.extraction
     ? new MediaExtractionService({
-        storage, repository, logger, now: () => clock.now, onCompleted: (id, rid) => textAnalysis?.schedule(id, rid),
+        storage, repository, logger, now: () => clock.now, onCompleted: (id, rid) => { textAnalysis?.schedule(id, rid); visualAnalysis?.schedule(id, rid); },
         extractor: opts.extraction.extractor ?? new FfmpegMediaExtractor({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' }),
         queue: new ProcessingQueue(opts.extraction.maxConcurrent ?? 1, opts.extraction.maxQueued ?? 10),
         limits: { ...defaultExtractionLimits(), ...opts.extraction.limits },
       })
     : undefined;
   const service = new MediaService({
-    storage, repository, logger, limits, extraction, textAnalysis,
+    storage, repository, logger, limits, extraction, textAnalysis, visualAnalysis,
     processor: opts.processor ?? fakeProcessor(),
     queue: new ProcessingQueue(opts.maxConcurrentProcessing ?? 2, opts.maxQueuedProcessing ?? 10),
     now: () => clock.now,
@@ -122,12 +143,12 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
   const server = createApiServer({
     mediaService: service, logger, limits: { uploadTimeoutMs: 30_000 },
     allowedOrigins: opts.allowedOrigins ?? ['http://localhost:5173'],
-    health: { version: '0.0.0-test', environment: 'test', tools: opts.toolsStatus ?? { ffmpeg: true, ffprobe: true }, speech: { provider: opts.speech?.provider ? 'test' : 'none', available: !!opts.speech?.provider } },
+    health: { version: '0.0.0-test', environment: 'test', tools: opts.toolsStatus ?? { ffmpeg: true, ffprobe: true }, speech: { provider: opts.speech?.provider ? 'test' : 'none', available: !!opts.speech?.provider }, vision: { provider: opts.vision?.provider ? 'test' : 'none', available: !!opts.vision?.provider } },
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    url, storageDir, logs, service, extraction, textAnalysis, repository, storage, clock,
+    url, storageDir, logs, service, extraction, textAnalysis, visualAnalysis, repository, storage, clock,
     files: async () => (await readdir(storageDir)).filter((f) => f !== '.safewatch-storage'),
     close: async () => {
       server.closeAllConnections();
@@ -192,6 +213,17 @@ export async function waitForTextAnalysis(app: TestApp, id: string, timeoutMs = 
     const { textAnalysis } = (await res.json()) as { textAnalysis: TextAnalysis };
     if (textAnalysis.status === 'ready' || textAnalysis.status === 'failed') return textAnalysis;
     if (Date.now() > end) throw new Error(`timed out waiting for text analysis; last=${textAnalysis.status}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+export async function waitForVisualAnalysis(app: TestApp, id: string, timeoutMs = 60_000): Promise<VisualAnalysis> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await fetch(`${app.url}/api/media/${id}/visual`);
+    const { visualAnalysis } = (await res.json()) as { visualAnalysis: VisualAnalysis };
+    if (visualAnalysis.status === 'ready' || visualAnalysis.status === 'failed') return visualAnalysis;
+    if (Date.now() > end) throw new Error(`timed out waiting for visual analysis; last=${visualAnalysis.status}`);
     await new Promise((r) => setTimeout(r, 25));
   }
 }

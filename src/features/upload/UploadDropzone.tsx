@@ -11,6 +11,8 @@ import { isBusy, type ProcessingPhase } from '@/domain/media/ingestion';
 import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
+import { API_PATHS } from '@/domain/api/contract';
 import { ACCEPTED_VIDEO_EXTENSIONS } from '@/domain/media/validation';
 import { config } from '@/infrastructure/config/env';
 import { defaultMediaIngestion } from '@/infrastructure/mediaIngestionFactory';
@@ -18,6 +20,7 @@ import { cn } from '@/lib/cn';
 import { errorCopy } from './errorCopy';
 import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
 import { TextBadge, TranscriptPanel } from './TranscriptPanel';
+import { VisualBadge, VisualPanel } from './VisualPanel';
 import { useMediaIngestion } from './useMediaIngestion';
 import './upload.css';
 
@@ -125,6 +128,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
           analysis={state.status === 'ready' ? state.analysis : null}
           extraction={state.status === 'ready' ? state.extraction : null}
           textAnalysis={state.status === 'ready' ? state.textAnalysis : null}
+          visual={state.status === 'ready' ? state.visual : null}
           mode={ingestion.mode}
           onReplace={openPicker}
         />
@@ -158,11 +162,12 @@ interface AssetSummaryProps {
   analysis: AnalysisStatus | null;
   extraction: MediaExtraction | null;
   textAnalysis: TextAnalysis | null;
+  visual: VisualAnalysis | null;
   mode: 'local' | 'server';
   onReplace: () => void;
 }
 
-function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, mode, onReplace }: AssetSummaryProps) {
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, visual, mode, onReplace }: AssetSummaryProps) {
   const m = asset.metadata;
   const ready = status === 'ready';
   const uploading = status === 'processing' && phase === 'uploading';
@@ -201,6 +206,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
           <Badge tone="success">Media: ready</Badge>
           {mode === 'server' && <ExtractionBadge extraction={extraction} />}
           {mode === 'server' && extraction?.status === 'completed' && <TextBadge analysis={textAnalysis} />}
+          {mode === 'server' && extraction?.status === 'completed' && <VisualBadge analysis={visual} />}
           <Badge tone="neutral">Analysis: {ANALYSIS_LABEL[analysis ?? 'not_started'].toLowerCase()}</Badge>
         </div>
       )}
@@ -213,6 +219,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
       )}
       {ready && mode === 'server' && <ExtractionPanel extraction={extraction} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <TranscriptPanel analysis={textAnalysis} />}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <VisualPanel analysis={visual} frameUrl={(frameId) => `${config.apiBaseUrl}${API_PATHS.frame(asset.id, frameId)}`} />}
       {ready && (
         <div className="sw-upload__alert">
           <Alert tone="info" title={mode === 'server' ? 'Stored temporarily' : 'Analysis has not started'}>

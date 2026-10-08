@@ -41,6 +41,14 @@ describe('parseServerConfig', () => {
     const c = parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'whispercpp', SAFEWATCH_SPEECH_MODEL_PATH: '/models/ggml-base.bin', SAFEWATCH_SPEECH_LANGUAGE: 'HI', SAFEWATCH_SPEECH_MAX_DURATION_SECONDS: '600' }).speech;
     expect(c).toMatchObject({ provider: 'whispercpp', modelPath: '/models/ggml-base.bin', modelName: 'ggml-base', language: 'hi', maxDurationSeconds: 600, binaryPath: 'whisper-cli' });
   });
+  it('visual analysis is off by default; settings are validated and bounded', () => {
+    expect(parseServerConfig({}).vision).toMatchObject({ provider: 'none', binaryPath: 'bin/safewatch-vision', maxFrames: 300, batchSize: 8, minConfidence: 0.1, maxConcurrent: 1 });
+    expect(parseServerConfig({ SAFEWATCH_VISION_PROVIDER: 'apple-vision', SAFEWATCH_VISION_BATCH_SIZE: '4', SAFEWATCH_VISION_MIN_CONFIDENCE: '0.3', SAFEWATCH_VISION_MAX_FRAME_MB: '2' }).vision)
+      .toMatchObject({ provider: 'apple-vision', batchSize: 4, minConfidence: 0.3, maxFrameBytes: 2 * 1024 * 1024 });
+    for (const [k, v] of [['SAFEWATCH_VISION_PROVIDER', 'openai'], ['SAFEWATCH_VISION_MIN_CONFIDENCE', '2'], ['SAFEWATCH_VISION_MIN_CONFIDENCE', 'abc'], ['SAFEWATCH_VISION_BATCH_SIZE', '0'], ['SAFEWATCH_VISION_MAX_FRAMES', '99999'], ['SAFEWATCH_VISION_TIMEOUT_MS', '5'], ['SAFEWATCH_MAX_CONCURRENT_VISION', '0']]) {
+      expect(() => parseServerConfig({ [k as string]: v as string })).toThrow(new RegExp(k as string));
+    }
+  });
   it('rejects invalid speech settings, including anything that is not a language code', () => {
     for (const [k, v] of [['SAFEWATCH_SPEECH_PROVIDER', 'openai'], ['SAFEWATCH_SPEECH_LANGUAGE', 'en; rm -rf /'], ['SAFEWATCH_SPEECH_LANGUAGE', 'english'], ['SAFEWATCH_SPEECH_TIMEOUT_MS', '10'], ['SAFEWATCH_MAX_CONCURRENT_SPEECH', '0'], ['SAFEWATCH_SPEECH_MAX_TRACKS', '99'], ['SAFEWATCH_SPEECH_MAX_AUDIO_MB', '0']]) {
       expect(() => parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'none', [k as string]: v as string })).toThrow(new RegExp(k as string));

@@ -12,7 +12,7 @@ export interface ApiDeps {
   logger: Logger;
   limits: { uploadTimeoutMs: number };
   allowedOrigins: readonly string[];
-  health: { version: string; environment: string; tools: { ffmpeg: boolean; ffprobe: boolean }; speech: { provider: string; available: boolean } };
+  health: { version: string; environment: string; tools: { ffmpeg: boolean; ffprobe: boolean }; speech: { provider: string; available: boolean }; vision: { provider: string; available: boolean } };
 }
 
 const REQUEST_ID = /^[A-Za-z0-9-]{8,64}$/;
@@ -75,8 +75,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
         code = 'NOT_FOUND';
         return sendError(req, res, code, requestId);
       }
-      const { tools, version, environment, speech } = deps.health;
-      const body: HealthResponse = { status: tools.ffmpeg && tools.ffprobe ? 'ok' : 'degraded', service: 'safewatch-api', version, environment, tools, speech };
+      const { tools, version, environment, speech, vision } = deps.health;
+      const body: HealthResponse = { status: tools.ffmpeg && tools.ffprobe ? 'ok' : 'degraded', service: 'safewatch-api', version, environment, tools, speech, vision };
       return sendJson(res, 200, body);
     }
 
@@ -96,6 +96,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
       return sendJson(res, 200, { textAnalysis: deps.mediaService.getTextAnalysis(transcriptMatch[1], { words: url.searchParams.get('words') !== 'false' }) });
     }
 
+    const visualMatch = /^\/api\/media\/([^/]+)\/visual$/.exec(path);
+    if (visualMatch?.[1] && req.method === 'GET') {
+      return sendJson(res, 200, { visualAnalysis: deps.mediaService.getVisualAnalysis(visualMatch[1], { observations: url.searchParams.get('observations') !== 'false' }) });
+    }
+
+    const frameMatch = /^\/api\/media\/([^/]+)\/frames\/(frm-\d{5})$/.exec(path);
+    if (frameMatch?.[1] && frameMatch[2] && req.method === 'GET') {
+      return await sendFrame(res, deps.mediaService.getFrame(frameMatch[1], frameMatch[2]));
+    }
+
     const match = /^\/api\/media\/([^/]+)$/.exec(path);
     if (match?.[1] && (req.method === 'GET' || req.method === 'DELETE')) {
       const id = match[1];
@@ -113,6 +123,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
     sendError(req, res, code, requestId, consumedBody);
   } finally {
     deps.logger.info('request', { op: 'http', requestId, method: req.method, path: path.startsWith('/api/media/') ? path.replace(/^\/api\/media\/[^/]+/, '/api/media/:id') : path, status: res.statusCode, errorCode: code, durationMs: Date.now() - started });
+  }
+}
+
+/** Sampled frames are derived media: served as images only, never sniffed, never executed or embedded elsewhere. */
+async function sendFrame(res: ServerResponse, frame: { stream: AsyncIterable<Uint8Array>; sizeBytes: number }): Promise<void> {
+  res.writeHead(200, {
+    'content-type': 'image/jpeg',
+    'content-length': frame.sizeBytes,
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; sandbox",
+  });
+  try {
+    for await (const chunk of frame.stream) if (!res.write(chunk)) await new Promise<void>((r) => res.once('drain', r));
+    res.end();
+  } catch {
+    res.destroy();
   }
 }
 

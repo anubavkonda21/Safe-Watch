@@ -2,6 +2,8 @@ import { parseServerConfig } from './config';
 import { MediaExtractionService } from './application/extractionService';
 import { MediaService } from './application/mediaService';
 import { TextAnalysisService, limitsFromConfig } from './application/textAnalysisService';
+import { VisualAnalysisService, limitsFromVisionConfig } from './application/visualAnalysisService';
+import { AppleVisionProvider } from './infrastructure/vision/appleVisionProvider';
 import { ProcessingQueue } from './application/processingQueue';
 import { createApiServer } from './api/server';
 import { FfmpegMediaExtractor } from './infrastructure/ffmpeg/ffmpegMediaExtractor';
@@ -28,7 +30,7 @@ if (!tools.ffmpeg || !tools.ffprobe) {
 const version = process.env.npm_package_version ?? 'unknown'; // set by npm when started through an npm script
 const storage = new LocalDiskMediaStorage(config.storageDir);
 const repository = new InMemoryMediaRepository();
-const { extraction: ex, speech: sp } = config;
+const { extraction: ex, speech: sp, vision: vs } = config;
 const speechProvider = sp.provider === 'whispercpp' && sp.modelPath
   ? new WhisperCppProvider({ binaryPath: sp.binaryPath, modelPath: sp.modelPath, modelName: sp.modelName, threads: sp.threads })
   : null;
@@ -41,13 +43,19 @@ if (speechProvider && !speechAvailable) logger.warn('speech-to-text unavailable:
 const textAnalysis = new TextAnalysisService({
   storage, repository, speech: speechProvider, queue: new ProcessingQueue(sp.maxConcurrent, sp.maxQueued), logger, limits: limitsFromConfig(sp),
 });
+const visionProvider = vs.provider === 'apple-vision' ? new AppleVisionProvider({ binaryPath: vs.binaryPath }) : null;
+const visionAvailable = visionProvider ? await visionProvider.isAvailable() : false;
+if (visionProvider && !visionAvailable) logger.warn('visual analysis unavailable: helper binary not found or not runnable (build it with scripts/build-vision-helper.sh)', { op: 'startup', provider: vs.provider });
+const visualAnalysis = new VisualAnalysisService({
+  storage, repository, provider: visionAvailable ? visionProvider : null, queue: new ProcessingQueue(vs.maxConcurrent, vs.maxQueued), logger, limits: limitsFromVisionConfig(vs),
+});
 const extraction = new MediaExtractionService({
   storage,
   repository,
   extractor: new FfmpegMediaExtractor(config),
   queue: new ProcessingQueue(ex.maxConcurrent, ex.maxQueued),
   logger,
-  onCompleted: (id, requestId) => textAnalysis.schedule(id, requestId),
+  onCompleted: (id, requestId) => { textAnalysis.schedule(id, requestId); if (vs.provider !== 'none') visualAnalysis.schedule(id, requestId); },
   limits: { timeoutMs: ex.timeoutMs, frame: ex.frame, maxFrameBytes: ex.maxFrameBytes, maxAudioBytes: ex.maxAudioBytes, maxAudioTracks: ex.maxAudioTracks, maxCues: ex.maxCues, maxSubtitleBytes: ex.maxSubtitleBytes },
 });
 const mediaService = new MediaService({
@@ -57,6 +65,7 @@ const mediaService = new MediaService({
   queue: new ProcessingQueue(config.maxConcurrentProcessing, config.maxQueuedProcessing),
   extraction,
   textAnalysis,
+  visualAnalysis,
   logger,
   limits: config,
 });
@@ -67,7 +76,7 @@ const server = createApiServer({
   logger,
   limits: config,
   allowedOrigins: config.allowedOrigins,
-  health: { version, environment: config.environment, tools, speech: { provider: sp.provider, available: speechAvailable } },
+  health: { version, environment: config.environment, tools, speech: { provider: sp.provider, available: speechAvailable }, vision: { provider: vs.provider, available: visionAvailable } },
 });
 
 const sweeper = setInterval(() => { void mediaService.sweep(); }, config.sweepIntervalMs);

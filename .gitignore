@@ -12,3 +12,5 @@ dist-server
 .safewatch-storage
 .vitest
 models/
+bin/
+server/test/fixtures/vision-cache/

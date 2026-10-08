@@ -39,6 +39,25 @@ export interface SpeechConfig {
   threads: number;
 }
 
+export interface VisionConfig {
+  /** `none`: no visual analysis. `apple-vision`: on-device Apple Vision through the safewatch-vision helper (macOS only). */
+  provider: 'none' | 'apple-vision';
+  binaryPath: string;
+  /** Wall-clock limit per batch of frames. The first run after a reboot compiles Apple's models and can take ~30 s. */
+  timeoutMs: number;
+  /** Frames beyond this many are skipped (reported, never silent). */
+  maxFrames: number;
+  /** Frames handed to one helper process. */
+  batchSize: number;
+  /** Per-frame size limit; larger frames are refused before decoding. */
+  maxFrameBytes: number;
+  minConfidence: number;
+  maxLabelsPerFrame: number;
+  maxObservationsPerFrame: number;
+  maxConcurrent: number;
+  maxQueued: number;
+}
+
 export interface ServerConfig {
   environment: 'development' | 'production' | 'test';
   host: string;
@@ -60,6 +79,7 @@ export interface ServerConfig {
   ffprobePath: string;
   extraction: ExtractionConfig;
   speech: SpeechConfig;
+  vision: VisionConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 }
 
@@ -116,6 +136,24 @@ function speech(env: Env): SpeechConfig {
   };
 }
 
+function vision(env: Env): VisionConfig {
+  const minConfidence = Number(env.SAFEWATCH_VISION_MIN_CONFIDENCE?.trim() || '0.1');
+  if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) throw new Error(`Invalid SAFEWATCH_VISION_MIN_CONFIDENCE "${env.SAFEWATCH_VISION_MIN_CONFIDENCE}": expected a number between 0 and 1.`);
+  return {
+    provider: oneOf(env, 'SAFEWATCH_VISION_PROVIDER', ['none', 'apple-vision'] as const, 'none'),
+    binaryPath: env.SAFEWATCH_VISION_BINARY?.trim() || 'bin/safewatch-vision',
+    timeoutMs: int(env, 'SAFEWATCH_VISION_TIMEOUT_MS', 2 * 60_000, 1000, 60 * 60_000),
+    maxFrames: int(env, 'SAFEWATCH_VISION_MAX_FRAMES', 300, 1, 2000),
+    batchSize: int(env, 'SAFEWATCH_VISION_BATCH_SIZE', 8, 1, 32),
+    maxFrameBytes: int(env, 'SAFEWATCH_VISION_MAX_FRAME_MB', 8, 1, 64) * 1024 * 1024,
+    minConfidence,
+    maxLabelsPerFrame: int(env, 'SAFEWATCH_VISION_MAX_LABELS', 8, 1, 50),
+    maxObservationsPerFrame: int(env, 'SAFEWATCH_VISION_MAX_OBSERVATIONS_PER_FRAME', 64, 1, 500),
+    maxConcurrent: int(env, 'SAFEWATCH_MAX_CONCURRENT_VISION', 1, 1, 4),
+    maxQueued: int(env, 'SAFEWATCH_MAX_QUEUED_VISION', 20, 0, 1000),
+  };
+}
+
 /** Parses and validates server configuration. Throws on invalid values so misconfiguration fails at startup. */
 export function parseServerConfig(env: Env): ServerConfig {
   const MIN = 60_000;
@@ -150,6 +188,7 @@ export function parseServerConfig(env: Env): ServerConfig {
       maxSubtitleBytes: int(env, 'SAFEWATCH_SUBTITLE_MAX_MB', 8, 1, 256) * 1024 * 1024,
     },
     speech: speech(env),
+    vision: vision(env),
     ffmpegPath: env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg',
     ffprobePath: env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe',
     logLevel: oneOf(env, 'SAFEWATCH_LOG_LEVEL', ['debug', 'info', 'warn', 'error', 'silent'] as const, 'info'),

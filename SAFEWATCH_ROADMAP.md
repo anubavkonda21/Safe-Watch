@@ -9,15 +9,16 @@ Each checkpoint is reviewed before the next is started. Scopes below are intent,
 | 2 | Server Media Foundation | Node API, streamed upload, temporary storage lifecycle, FFprobe metadata, FFmpeg decode check, `AnalysisJob` boundary, upload progress UI | DONE |
 | 3 | Media Extraction Pipeline | Audio (WAV), subtitle cues, capped frame sampling, extraction manifest/API/UI, limits, cleanup, determinism | DONE |
 | 4 | Speech + Subtitle Intelligence Foundation | Local speech-to-text (whisper.cpp) behind a port, transcript model with word timing, track selection, speech/subtitle timeline and alignment, custom-filter model with deterministic match detection, transcript and filters UI. Text evidence only | DONE |
-| 5 | Custom Word/Phrase Detection | Builds on the Checkpoint 4 foundation (models, matching, UI exist): server-side/persistent filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
-| 6 | Visual Content Detection | Frame analysis for violence, graphic, drugs, sexual content with confidence | PLANNED |
-| 7 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
-| 8 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
-| 9 | Pre-Playback Warning | Summary and warnings before watching | PLANNED |
-| 10 | Filtering Engine | Mute, beep, subtitle censoring, blur, scene skip | PLANNED |
-| 11 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
-| 12 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PLANNED |
-| 13 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
+| 5 | Visual Intelligence Foundation | Local image model (Apple Vision) behind a `VisualAnalysisProvider` port; timestamped visual observations (labels, located people/animals, recognised text) per sampled frame; visual timeline and API; frame preview UI; unified-evidence projection. Visual evidence only: no safety classification | DONE |
+| 6 | Custom Word/Phrase Detection | Builds on the Checkpoint 4 foundation (models, matching, UI exist): server-side/persistent filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
+| 7 | Visual Content Detection | Frame analysis for violence, graphic, drugs, sexual content with confidence | PLANNED |
+| 8 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
+| 9 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
+| 10 | Pre-Playback Warning | Summary and warnings before watching | PLANNED |
+| 11 | Filtering Engine | Mute, beep, subtitle censoring, blur, scene skip | PLANNED |
+| 12 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
+| 13 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PLANNED |
+| 14 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
 
 ## How the foundation supports this
 

@@ -99,7 +99,7 @@ describe('createMediaIngestion with a server uploader', () => {
     expect(uploader.upload).not.toHaveBeenCalled();
   });
   it('uploads, forwards progress, and returns the server asset and analysis status', async () => {
-    const upload = vi.fn(async (_f: File, h?: { onProgress?: (n: number) => void }) => { h?.onProgress?.(0.5); return { asset: remoteAsset(), analysis: { status: 'not_started' as const }, extraction: { status: 'queued' as const, phase: null }, text: { status: 'not_started' as const, phase: null } }; });
+    const upload = vi.fn(async (_f: File, h?: { onProgress?: (n: number) => void }) => { h?.onProgress?.(0.5); return { asset: remoteAsset(), analysis: { status: 'not_started' as const }, extraction: { status: 'queued' as const, phase: null }, text: { status: 'not_started' as const, phase: null }, visual: { status: 'not_started' as const, phase: null, progress: null } }; });
     const ingestion = make({ upload, waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn() });
     const file = makeFile('a.mp4', HEADERS.mp4);
     const onProgress = vi.fn();
@@ -109,7 +109,7 @@ describe('createMediaIngestion with a server uploader', () => {
   });
   it('turns a server-side failed asset into a typed error', async () => {
     const failed = remoteAsset({ status: 'failed', failure: { code: 'invalid-media' } });
-    const ingestion = make({ upload: async () => ({ asset: failed, analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null } }), waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn() });
+    const ingestion = make({ upload: async () => ({ asset: failed, analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null } }), waitForExtraction: neverSettles, waitForTextAnalysis: neverSettles, remove: vi.fn() });
     const file = makeFile('a.mp4', HEADERS.mp4);
     await expect(ingestion.prepare(file, await ingestion.accept(file))).rejects.toMatchObject({ code: 'invalid-media' });
   });

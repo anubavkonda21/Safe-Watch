@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 5 — visual intelligence foundation.** The frames extraction already produces are now described by a local image model (Apple Vision on macOS, behind a replaceable port): labels, located people/animals and recognised text, each with a media timestamp, shown as a frame grid with a preview. This is **visual evidence only**: there is **no safety classification, no score, no verdict, and nothing is muted, censored, blurred or skipped**. Details below and in `CHECKPOINT_5_REPORT.md`.
+
 **Checkpoint 4 — speech & subtitle intelligence foundation.** On top of upload, storage, FFprobe/FFmpeg and deterministic extraction, SafeWatch now transcribes speech locally (whisper.cpp) and merges it with subtitle text into one timestamped, aligned timeline, and can find user-defined words and phrases in it. This is **text evidence only**: there is **no safety classification, no scoring, no verdict, and nothing is muted, censored or changed**. A video can be `Media: ready`, `Extraction: completed`, `Text: ready` and `Analysis: not started` at the same time.
 
 | Capability | Status |
@@ -26,16 +28,17 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Speech-to-text (local whisper.cpp, word timestamps, language detection) | IMPLEMENTED — optional, off unless configured |
 | Transcript model, track selection, speech/subtitle timeline and alignment | IMPLEMENTED |
 | Custom filters (add/enable/remove) and deterministic match detection in speech and subtitles | IMPLEMENTED — detection only |
+| Visual analysis (local Apple Vision: labels, people/animals with boxes, OCR) per sampled frame | IMPLEMENTED — optional, macOS only, off unless configured |
+| Visual timeline, frame API and "Visual evidence" UI with frame preview | IMPLEMENTED — evidence only |
 | Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
 | Persistent database, authentication, background workers | PLANNED |
 | Responsive layout, accessibility foundation | IMPLEMENTED |
 | Tests, lint, typecheck, build | IMPLEMENTED |
-| Profanity / sensitive-topic classification, visual AI, safety score, verdicts | PLANNED (not implemented) |
+| Safety classification of visual evidence (violence, sexual, drugs), safety score, verdicts | PLANNED (not implemented) |
 | Muting, beeping, subtitle censoring, blurring, scene skipping | PLANNED (not implemented) |
 | Profanity / custom phrase detection | PLANNED |
-| Visual detection (violence, graphic, drugs, sexual content) | PLANNED |
 | Contextual analysis, risk score, timeline | PLANNED |
 | Pre-playback warnings | PLANNED |
 | Filtering (mute, beep, subtitle censoring, blur, skip) | PLANNED |
@@ -151,6 +154,23 @@ SubtitleTrack (text cues) ──────────────────
 - **Language:** detected per track; never translated. Measured limits: Hindi on `base` is written in Urdu script; code-switched Hindi/English is not transcribed faithfully by either model; the brand name "SafeWatch" is heard as "safe watch" (the `phrase` match mode handles it).
 - **Custom filters:** a "Custom filters" section lets the visitor add words/phrases (Whole word, Phrase, Contains, Exact case), enable/disable and remove them. They stay in the browser; matches are listed with source, time and confidence. SafeWatch does not mute or alter anything.
 - Measure it yourself: `npm run check:speech -- video.mp4`. Details, decisions, privacy and limits: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §26.
+
+## Visual intelligence (Checkpoint 5)
+
+```
+Frame (JPEG, from extraction) ──► VisualAnalysisProvider (port) ──► safewatch-vision (Apple Vision) ──► raw observations (untrusted)
+                                         ▼ normalizeObservation (validate, clamp, drop unusable)
+              VisualObservation { frameId, timestampSeconds, type: classification | object | text, label, confidence, region }
+                                         ▼ sorted deterministically ──► VisualAnalysis ──► GET /api/media/:id/visual ──► "Visual evidence" UI
+```
+
+- **Provider:** Apple Vision framework through a small Swift helper (`native/apple-vision`, built to `bin/safewatch-vision`, git-ignored). On-device; **frames never leave the machine**; no model weights in the repository. macOS only: the port keeps it replaceable (a Linux/ONNX adapter is future work).
+- **What it reports:** image labels with confidence, people and animals with normalised boxes, and recognised text with boxes. No face detection or recognition. Labels use Apple's own vocabulary and can be wrong (a black frame is labelled "night sky").
+- **Setup:** `scripts/build-vision-helper.sh`, then `SAFEWATCH_VISION_PROVIDER=apple-vision` (see `.env.example`). Without it the server still runs and the UI says visual analysis is not enabled.
+- **API:** `GET /api/media/:id/visual` (`?observations=false` for a small progress form), `GET /api/media/:id/frames/:frameId` (the sampled JPEG, only ids from the manifest). `/api/health` reports `vision: {provider, available}` only.
+- **Limits:** at most 300 frames (the extraction cap), 8 per helper process, 120 s per batch, 8 MB per frame, 64 observations per frame; a bad frame fails alone; the queue is bounded (default 1 job).
+- **Tests:** the real-inference tests run on macOS on every `npm test`: `server/test/globalSetup.ts` builds the helper and fetches seven checksummed COCO photos (CC BY 2.0, cached under git-ignored `server/test/fixtures/vision-cache`). A missing helper **fails** the run; it is never converted to a mock. On other platforms those tests are skipped.
+- Measure it yourself: `npm run check:vision -- video.mp4`. Details, decisions, privacy and limits: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §27.
 
 ## Technology stack
 
