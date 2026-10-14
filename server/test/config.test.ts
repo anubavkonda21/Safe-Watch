@@ -49,6 +49,13 @@ describe('parseServerConfig', () => {
       expect(() => parseServerConfig({ [k as string]: v as string })).toThrow(new RegExp(k as string));
     }
   });
+  it('context correlation settings default to the documented values and are bounded', () => {
+    expect(parseServerConfig({}).context).toEqual({ windowBeforeMs: 500, windowAfterMs: 1000, maxContextMs: 20_000, maxVisualCoverageMs: 5000 });
+    expect(parseServerConfig({ SAFEWATCH_CONTEXT_WINDOW_AFTER_MS: '2000', SAFEWATCH_CONTEXT_MAX_MS: '30000' }).context).toMatchObject({ windowAfterMs: 2000, maxContextMs: 30_000 });
+    for (const [k, v] of [['SAFEWATCH_CONTEXT_WINDOW_BEFORE_MS', '-1'], ['SAFEWATCH_CONTEXT_WINDOW_AFTER_MS', 'abc'], ['SAFEWATCH_CONTEXT_MAX_MS', '5'], ['SAFEWATCH_CONTEXT_MAX_VISUAL_COVERAGE_MS', '99999999']]) {
+      expect(() => parseServerConfig({ [k as string]: v as string })).toThrow(new RegExp(k as string));
+    }
+  });
   it('rejects invalid speech settings, including anything that is not a language code', () => {
     for (const [k, v] of [['SAFEWATCH_SPEECH_PROVIDER', 'openai'], ['SAFEWATCH_SPEECH_LANGUAGE', 'en; rm -rf /'], ['SAFEWATCH_SPEECH_LANGUAGE', 'english'], ['SAFEWATCH_SPEECH_TIMEOUT_MS', '10'], ['SAFEWATCH_MAX_CONCURRENT_SPEECH', '0'], ['SAFEWATCH_SPEECH_MAX_TRACKS', '99'], ['SAFEWATCH_SPEECH_MAX_AUDIO_MB', '0']]) {
       expect(() => parseServerConfig({ SAFEWATCH_SPEECH_PROVIDER: 'none', [k as string]: v as string })).toThrow(new RegExp(k as string));

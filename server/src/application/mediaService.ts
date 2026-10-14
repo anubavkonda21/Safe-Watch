@@ -7,6 +7,8 @@ import type { MediaResource } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
+import { buildContextAnalysis, type ContextAnalysis } from '@/domain/context/contextAnalysis';
+import type { ContextConfig } from '@/domain/context/contextEvent';
 import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
@@ -25,6 +27,8 @@ export interface MediaServiceDeps {
   textAnalysis?: { cancel(mediaId: string): void };
   /** Optional: visual analysis is cancelled before media is deleted. */
   visualAnalysis?: { cancel(mediaId: string): void };
+  /** Temporal correlation settings; the domain defaults apply when omitted. */
+  context?: Partial<ContextConfig>;
   logger: Logger;
   limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number };
   now?: () => number;
@@ -164,6 +168,21 @@ export class MediaService {
     const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
     if (!record) throw new MediaServiceError('NOT_FOUND');
     return options.observations === false ? { ...record.visual, observations: [] } : record.visual;
+  }
+
+  /**
+   * Contextual evidence: speech, subtitle and visual evidence correlated on the media timeline. A pure, deterministic
+   * function of what the earlier stages produced (no model, no file access), so it is computed on request and never stored.
+   * `evidence: false` omits the members of each event (a much smaller payload for polling).
+   */
+  getContext(id: string, options: { evidence?: boolean } = {}): ContextAnalysis {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record) throw new MediaServiceError('NOT_FOUND');
+    const analysis = buildContextAnalysis({
+      mediaId: record.asset.id, extractionStatus: record.extraction.status, mediaDurationSeconds: record.asset.metadata.durationSeconds,
+      text: record.text, visual: record.visual, frameStepSeconds: record.extraction.frames?.effectiveIntervalSeconds ?? null, config: this.deps.context,
+    });
+    return options.evidence === false ? { ...analysis, events: analysis.events.map((e) => ({ ...e, members: [], ambient: [] })) } : analysis;
   }
 
   /**

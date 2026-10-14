@@ -1,4 +1,5 @@
 import { tmpdir } from 'node:os';
+import { DEFAULT_CONTEXT_CONFIG, type ContextConfig } from '@/domain/context/contextEvent';
 import { join } from 'node:path';
 
 /** Everything that bounds extraction work. See SAFEWATCH_MEDIA_ARCHITECTURE.md for the reasoning behind the defaults. */
@@ -80,6 +81,8 @@ export interface ServerConfig {
   extraction: ExtractionConfig;
   speech: SpeechConfig;
   vision: VisionConfig;
+  /** Temporal correlation settings (see src/domain/context/contextEvent.ts for the reasoning behind the defaults). */
+  context: ContextConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
 }
 
@@ -189,6 +192,12 @@ export function parseServerConfig(env: Env): ServerConfig {
     },
     speech: speech(env),
     vision: vision(env),
+    context: {
+      windowBeforeMs: int(env, 'SAFEWATCH_CONTEXT_WINDOW_BEFORE_MS', DEFAULT_CONTEXT_CONFIG.windowBeforeMs, 0, 60_000),
+      windowAfterMs: int(env, 'SAFEWATCH_CONTEXT_WINDOW_AFTER_MS', DEFAULT_CONTEXT_CONFIG.windowAfterMs, 0, 60_000),
+      maxContextMs: int(env, 'SAFEWATCH_CONTEXT_MAX_MS', DEFAULT_CONTEXT_CONFIG.maxContextMs, 1000, 600_000),
+      maxVisualCoverageMs: int(env, 'SAFEWATCH_CONTEXT_MAX_VISUAL_COVERAGE_MS', DEFAULT_CONTEXT_CONFIG.maxVisualCoverageMs, 0, 60_000),
+    },
     ffmpegPath: env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg',
     ffprobePath: env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe',
     logLevel: oneOf(env, 'SAFEWATCH_LOG_LEVEL', ['debug', 'info', 'warn', 'error', 'silent'] as const, 'info'),

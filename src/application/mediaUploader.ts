@@ -1,6 +1,7 @@
 import type { MediaResource } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 
 export interface UploadHooks {
@@ -35,6 +36,11 @@ export interface MediaUploader {
    * Optional: an uploader without it simply has no visual evidence.
    */
   waitForVisualAnalysis?(mediaId: string, hooks?: { onUpdate?: (visual: VisualAnalysis) => void; signal?: AbortSignal }): Promise<VisualAnalysis>;
+  /**
+   * Loads the contextual evidence (speech, subtitles and visual observations correlated on the media timeline) once the
+   * evidence stages have finished. Resolves with a non-pending result. Optional: an uploader without it has no context.
+   */
+  loadContext?(mediaId: string, hooks?: { signal?: AbortSignal }): Promise<ContextAnalysis>;
   /** Best-effort deletion of a stored upload. Never rejects. */
   remove(mediaId: string): Promise<void>;
 }

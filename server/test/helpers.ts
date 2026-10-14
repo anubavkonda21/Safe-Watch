@@ -67,6 +67,7 @@ export interface TestAppOptions {
   /** Enables text analysis after extraction. `provider: null` = speech-to-text not configured (subtitle evidence only). Requires `extraction`. */
   speech?: { provider: SpeechToTextProvider | null; limits?: Partial<TextAnalysisLimits>; maxConcurrent?: number; maxQueued?: number };
   /** Enables visual analysis after extraction. `provider: null` = not configured. Requires `extraction`. */
+  context?: Partial<import('@/domain/context/contextEvent').ContextConfig>;
   vision?: { provider: VisualAnalysisProvider | null; limits?: Partial<VisualLimits>; maxConcurrent?: number; maxQueued?: number };
 }
 
@@ -135,7 +136,7 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
       })
     : undefined;
   const service = new MediaService({
-    storage, repository, logger, limits, extraction, textAnalysis, visualAnalysis,
+    storage, repository, logger, limits, extraction, textAnalysis, visualAnalysis, context: opts.context,
     processor: opts.processor ?? fakeProcessor(),
     queue: new ProcessingQueue(opts.maxConcurrentProcessing ?? 2, opts.maxQueuedProcessing ?? 10),
     now: () => clock.now,
@@ -224,6 +225,17 @@ export async function waitForVisualAnalysis(app: TestApp, id: string, timeoutMs 
     const { visualAnalysis } = (await res.json()) as { visualAnalysis: VisualAnalysis };
     if (visualAnalysis.status === 'ready' || visualAnalysis.status === 'failed') return visualAnalysis;
     if (Date.now() > end) throw new Error(`timed out waiting for visual analysis; last=${visualAnalysis.status}`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+export async function waitForContext(app: TestApp, id: string, timeoutMs = 60_000) {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    const res = await fetch(`${app.url}/api/media/${id}/context`);
+    const { context } = (await res.json()) as { context: import('@/domain/context/contextAnalysis').ContextAnalysis };
+    if (context.status !== 'pending') return context;
+    if (Date.now() > end) throw new Error('timed out waiting for context');
     await new Promise((r) => setTimeout(r, 25));
   }
 }

@@ -439,3 +439,61 @@ Frames are untrusted media: the helper opens only JPEG/PNG (type checked by the 
 ### 27.5 Performance baseline
 
 See `CHECKPOINT_5_REPORT.md`. Measured warm on this machine: about 36 ms per 640×480 frame, 300 frames in about 10.7 s of provider time, helper about 70 MB RSS. The first-ever run took about 26 s (system model compilation). These are small-frame, repeated-photo numbers, not a general benchmark.
+
+---
+
+## 28. Cross-modal context and temporal reasoning (Checkpoint 6)
+
+A deterministic layer between raw evidence and any future safety classifier. It answers "which evidence belongs together in time?", never "is this acceptable?". There is no model and no LLM in it: the first version had to establish temporal correctness, provenance, reproducibility and testability before anything probabilistic is added. No external service, no key, no download.
+
+```
+ TextAnalysis.timeline (speech, subtitle)  ─┐                     src/domain/evidence   EvidenceItem (CP5, unchanged)
+ VisualAnalysis.observations               ─┴─► buildEvidenceTimeline ─► correlateEvidence ─► ContextEvent[]   src/domain/context
+                                                                 ▲ frame step (extraction manifest)
+ MediaService.getContext  ──►  GET /api/media/:id/context  (pure function of the record; nothing stored, no files read)
+```
+
+### 28.1 Evidence and time
+
+The CP5 `EvidenceItem` is reused as is (modality, kind, start/end seconds, label, confidence, sourceId). Provenance is preserved end to end: every context member keeps modality, kind, exact time, label, the source's own confidence and the audio track, subtitle track or frame it came from. Media time is converted once, at the boundary, to **integer milliseconds** (`toMs`), so no later comparison depends on float rounding (`0.1 + 0.2` becomes `300`). Point observations have `endMs == startMs`. Malformed items (empty id, non-finite or negative time, end before start, unknown modality) are dropped and counted, never repaired. Duplicates (same id, or same modality, kind, time, source and label) are dropped and counted.
+
+### 28.2 Algorithm (`correlateEvidence`)
+
+Sort O(n log n), one pass O(n), no pairwise comparison.
+
+1. Validate, convert, dedupe. Sort by start, end, modality, id: input order cannot matter.
+2. **Extended evidence** (duration > `maxContextMs`) leaves the pass and becomes its own event.
+3. Each remaining item joins the **open window** when related, otherwise a new window starts. The window keeps three reaches: text (end + after), visual (end + after) and visual with coverage.
+   - an item is related when `start - before <= reach` (reason `overlap` if it starts inside the window, else `proximity`);
+   - a **frame** also relates to text through its **coverage** (half the sampling step, at most `maxVisualCoverageMs`): reason `visual-coverage`. Frames never chain to frames through coverage, and a frame attached only through coverage does not extend the window's reach (so a frame between two sentences cannot bridge them);
+   - a window stops growing when joining would make it longer than `maxContextMs` (`closedBy: max-duration`).
+4. Extended evidence is attached as `ambient` to every event it overlaps (not as a member, so it cannot glue unrelated moments together).
+5. Events are sorted and numbered `ctx-0000…`: the id is the chronological position, so the same input always gives the same ids.
+
+A window is never reopened: an item is related to the most recent window only (a single forward pass keeps it linear and explainable).
+
+### 28.3 Defaults and why
+
+| Setting | Default | Reason |
+| --- | --- | --- |
+| `windowBeforeMs` + `windowAfterMs` | 500 + 1000 (merge gap 1.5 s) | A sentence, its subtitle cue and an on-screen reaction fall inside it; separate sentences (pauses of seconds) do not |
+| `maxContextMs` | 20 000 | One scene-sized span however long the chain of neighbours is |
+| `maxVisualCoverageMs` | 5000 | With the default 10 s sampling a frame stands for about ±5 s; capped so sparse frames cannot reach far |
+
+All four are server configuration (`SAFEWATCH_CONTEXT_*`) and are echoed in the response. **Known behaviour:** continuous text (subtitle cues back to back) correctly forms one long chain, cut at 20 s; very dense frame sampling (step ≤ 1.5 s) chains frames, also cut at 20 s. Choose the sampling step with that in mind.
+
+### 28.4 Model
+
+`ContextEvent { id, startMs, endMs, sources, corroboration, members, ambient, extended, closedBy, facts, confidence }`. `sources` lists the modalities that contributed; `corroboration` is `multi-source` when at least two did (a structural fact, not a strength or safety claim). `facts` are presence flags, counts per kind and up to five strongest distinct visual observations by the provider's own confidence. `confidence` is **per modality** (count, how many reported one, min, max): speech and visual confidences mean different things, so no combined number exists anywhere. Each member says why it joined. There is no field, label or score about acceptability.
+
+### 28.5 Degradation
+
+`ContextAnalysis.status`: `pending` (extraction, text or visual analysis still running: no events, never a partial guess), `ready`, `partial` (some input failed or is not enabled; the events from the rest are returned and `inputs` plus `warnings` name what is missing), `unavailable` (nothing usable). Each input (`speech`, `subtitles`, `visual`) is `used`, `empty` (the stage worked and found nothing), `failed`, `not-enabled` or `pending`. A provider failure is never turned into an empty success.
+
+### 28.6 API, security, privacy
+
+`GET /api/media/:id/context[?evidence=false]`, computed from the in-memory record: no filesystem access, no client-provided paths or evidence (other query parameters are ignored), ids validated like every media route (unknown or malformed ids are 404). Only GET is served. Responses contain no paths. Evidence text is untrusted, rendered as text, never logged. Everything is local. **Unchanged production gates (NOT solved):** authentication (media ids are bearer tokens: anyone with an id can read its context), rate limiting, disk quota, process sandboxing.
+
+### 28.7 Performance
+
+Synthetic evidence, one speech segment and subtitle cue every 6 s and 8 observations per frame every 3 s (`npm run check:context`): 180 items (1 min) 0.24 ms; 5 400 (30 min) 5.5 ms; 64 800 (6 h) 84 ms; 259 200 (24 h) 362 ms: about 1.3 µs per item, linear. The real inputs are bounded (at most 300 frames and an hour of speech by default), so it is far cheaper than extraction or inference.

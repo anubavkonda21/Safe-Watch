@@ -96,6 +96,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
       return sendJson(res, 200, { textAnalysis: deps.mediaService.getTextAnalysis(transcriptMatch[1], { words: url.searchParams.get('words') !== 'false' }) });
     }
 
+    const contextMatch = /^\/api\/media\/([^/]+)\/context$/.exec(path);
+    if (contextMatch?.[1] && req.method === 'GET') {
+      return sendJson(res, 200, { context: deps.mediaService.getContext(contextMatch[1], { evidence: url.searchParams.get('evidence') !== 'false' }) });
+    }
+
     const visualMatch = /^\/api\/media\/([^/]+)\/visual$/.exec(path);
     if (visualMatch?.[1] && req.method === 'GET') {
       return sendJson(res, 200, { visualAnalysis: deps.mediaService.getVisualAnalysis(visualMatch[1], { observations: url.searchParams.get('observations') !== 'false' }) });

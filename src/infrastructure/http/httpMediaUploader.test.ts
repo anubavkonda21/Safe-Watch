@@ -4,6 +4,8 @@ import { HttpMediaUploader } from './httpMediaUploader';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
 import { processingVisual, readyVisual } from '@/test/visualAnalysis';
+import { readyContext } from '@/test/contextAnalysis';
+import { unavailableContext } from '@/domain/context/contextAnalysis';
 import { failVisual } from '@/domain/vision/visualAnalysis';
 
 const asset = (status: MediaAsset['status'], extra: Partial<MediaAsset> = {}): MediaAsset => ({
@@ -165,6 +167,36 @@ describe('HttpMediaUploader', () => {
       const p = make().waitForExtraction('srv-1', { signal: ac.signal });
       ac.abort();
       await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
+    });
+  });
+
+  describe('loadContext', () => {
+    const respond = (c: unknown) => new Response(JSON.stringify({ context: c }), { status: 200 });
+    it('returns the first non-pending result from the context endpoint', async () => {
+      const urls: string[] = [];
+      const seq = [{ ...readyContext('srv-1'), status: 'pending', events: [] }, readyContext('srv-1')];
+      vi.stubGlobal('fetch', vi.fn(async (u: string) => { urls.push(u); return respond(seq.shift()); }));
+      const result = await make().loadContext('srv-1');
+      expect(result.status).toBe('ready');
+      expect(result.events.length).toBeGreaterThan(0);
+      expect(urls).toEqual(['http://api.test/api/media/srv-1/context', 'http://api.test/api/media/srv-1/context']);
+    });
+    it('returns an unavailable result as a value', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond(unavailableContext('srv-1'))));
+      await expect(make().loadContext('srv-1')).resolves.toMatchObject({ status: 'unavailable' });
+    });
+    it('times out while pending, reports an unreachable server, maps errors, and stops on abort', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => respond({ ...readyContext('srv-1'), status: 'pending', events: [] })));
+      await expect(make({ pollTimeoutMs: 30 }).loadContext('srv-1')).rejects.toMatchObject({ code: 'timeout' });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+      await expect(make().loadContext('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 503 })));
+      await expect(make().loadContext('srv-1')).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'NOT_FOUND' } }), { status: 404 })));
+      await expect(make().loadContext('srv-1')).rejects.toBeInstanceOf(Error);
+      const ac = new AbortController();
+      ac.abort();
+      await expect(make().loadContext('srv-1', { signal: ac.signal })).rejects.toMatchObject({ code: 'upload-failed' });
     });
   });
 

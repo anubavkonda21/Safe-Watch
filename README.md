@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 6 — cross-modal context and temporal reasoning foundation.** Speech, subtitle and visual evidence from the earlier steps is now correlated on the media timeline into **context events**: groups of evidence that belong together in time, each keeping every piece of evidence with its own provenance and confidence, and an explanation of why it was grouped. It is deterministic and local (no model, no LLM). **It does not classify safety: no safety score, no verdict, and nothing is muted, censored, blurred or skipped.** See `CHECKPOINT_6_REPORT.md`.
+
 **Checkpoint 5 — visual intelligence foundation.** The frames extraction already produces are now described by a local image model (Apple Vision on macOS, behind a replaceable port): labels, located people/animals and recognised text, each with a media timestamp, shown as a frame grid with a preview. This is **visual evidence only**: there is **no safety classification, no score, no verdict, and nothing is muted, censored, blurred or skipped**. Details below and in `CHECKPOINT_5_REPORT.md`.
 
 **Checkpoint 4 — speech & subtitle intelligence foundation.** On top of upload, storage, FFprobe/FFmpeg and deterministic extraction, SafeWatch now transcribes speech locally (whisper.cpp) and merges it with subtitle text into one timestamped, aligned timeline, and can find user-defined words and phrases in it. This is **text evidence only**: there is **no safety classification, no scoring, no verdict, and nothing is muted, censored or changed**. A video can be `Media: ready`, `Extraction: completed`, `Text: ready` and `Analysis: not started` at the same time.
@@ -30,6 +32,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Custom filters (add/enable/remove) and deterministic match detection in speech and subtitles | IMPLEMENTED — detection only |
 | Visual analysis (local Apple Vision: labels, people/animals with boxes, OCR) per sampled frame | IMPLEMENTED — optional, macOS only, off unless configured |
 | Visual timeline, frame API and "Visual evidence" UI with frame preview | IMPLEMENTED — evidence only |
+| Context events: speech, subtitle and visual evidence correlated by media time, with provenance, explanation and per-source confidence | IMPLEMENTED — grouping only |
+| Context API and timeline UI with evidence drill-down | IMPLEMENTED |
 | Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
@@ -171,6 +175,20 @@ Frame (JPEG, from extraction) ──► VisualAnalysisProvider (port) ──► 
 - **Limits:** at most 300 frames (the extraction cap), 8 per helper process, 120 s per batch, 8 MB per frame, 64 observations per frame; a bad frame fails alone; the queue is bounded (default 1 job).
 - **Tests:** the real-inference tests run on macOS on every `npm test`: `server/test/globalSetup.ts` builds the helper and fetches seven checksummed COCO photos (CC BY 2.0, cached under git-ignored `server/test/fixtures/vision-cache`). A missing helper **fails** the run; it is never converted to a mock. On other platforms those tests are skipped.
 - Measure it yourself: `npm run check:vision -- video.mp4`. Details, decisions, privacy and limits: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §27.
+
+## Cross-modal context (Checkpoint 6)
+
+```
+speech segments ─┐
+subtitle cues  ──┼─► EvidenceItem (one shape, media time) ─► correlateEvidence ─► ContextEvent[] ─► GET /api/media/:id/context ─► "Contextual evidence" UI
+visual observations ┘        validate · integer ms · dedupe · sort       one forward pass          members + why they joined
+```
+
+- **What it is:** a deterministic temporal layer. Two pieces of evidence are related when the later one starts within `windowBefore + windowAfter` (default 0.5 s + 1 s) of the earlier one ending; a context never exceeds `maxContext` (default 20 s); a sampled frame may also relate to nearby text through its coverage (half the sampling step, capped at 5 s). Evidence longer than a context (a 30 s subtitle) keeps its own event and is only listed as "also during this time" in the events it overlaps.
+- **What it keeps:** every member with modality, kind, exact time, label, the source's own confidence and the track/frame it came from; why it joined (`anchor`, `overlap`, `proximity`, `visual-coverage`); per-modality confidence ranges, never one combined number.
+- **What it is not:** it says nothing about whether content is acceptable. There is no safety field in the model, API or UI.
+- **API:** `GET /api/media/:id/context` (`?evidence=false` omits members). It is computed on request from the earlier stages (pure, no file access). `status` is `pending`, `ready`, `partial` (a modality failed or is not enabled, and the response says which) or `unavailable`.
+- **Config:** `SAFEWATCH_CONTEXT_*` (see `.env.example`). Measure it: `npm run check:context`. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §28.
 
 ## Technology stack
 

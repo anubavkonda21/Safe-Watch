@@ -1,6 +1,7 @@
 import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import type { MediaAsset } from '@/domain/media/asset';
 import { PENDING_METADATA } from '@/domain/media/asset';
@@ -37,6 +38,8 @@ export interface MediaIngestion {
   analyzeText(asset: MediaAsset, hooks?: { onUpdate?: (textAnalysis: TextAnalysis) => void }): Promise<TextAnalysis | null>;
   /** Server mode: follows visual analysis (frame observations). Local mode, or an uploader without it: resolves null. */
   analyzeVisual(asset: MediaAsset, hooks?: { onUpdate?: (visual: VisualAnalysis) => void }): Promise<VisualAnalysis | null>;
+  /** Server mode: loads the contextual evidence once speech, subtitles and visual analysis have finished. Local mode, or an uploader without it: resolves null. */
+  loadContext(asset: MediaAsset): Promise<ContextAnalysis | null>;
   /** Best-effort removal of server-side data for a finished asset. */
   remove(asset: MediaAsset): Promise<void>;
 }
@@ -106,6 +109,11 @@ export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
     async analyzeVisual(asset, hooks = {}) {
       if (!deps.uploader?.waitForVisualAnalysis) return null;
       return deps.uploader.waitForVisualAnalysis(asset.id, { onUpdate: hooks.onUpdate });
+    },
+
+    async loadContext(asset) {
+      if (!deps.uploader?.loadContext) return null;
+      return deps.uploader.loadContext(asset.id);
     },
 
     async remove(asset) {

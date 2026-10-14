@@ -1,6 +1,7 @@
 import type { MediaAsset } from './asset';
 import { PENDING_METADATA } from './asset';
 import { createExtraction } from '../extraction/extraction';
+import { unavailableContext } from '../context/contextAnalysis';
 import { createVisualAnalysis } from '../vision/visualAnalysis';
 import { createTextAnalysis } from '../text/textAnalysis';
 import { MediaIngestionError } from './errors';
@@ -80,6 +81,16 @@ describe('ingestionReducer', () => {
     expect(run([{ type: 'visual-analysis', visual: { ...v, mediaId: 'other' } }], ready)).toBe(ready);
     expect(run([{ type: 'visual-analysis', visual: v }])).toBe(initialIngestionState);
     expect(run([{ type: 'select', fileName: 'y' }], withVisual)).toEqual({ status: 'validating', fileName: 'y' });
+  });
+  it('context attaches to the ready asset only, independently of text and visual, and is dropped on a new selection', () => {
+    const ready = run([{ type: 'select', fileName: 'x' }, { type: 'accepted', asset }, { type: 'process' }, { type: 'ready', asset }]);
+    expect(ready).toMatchObject({ context: null });
+    const c = unavailableContext('a1');
+    const withContext = run([{ type: 'context', context: c }], ready);
+    expect(withContext).toMatchObject({ status: 'ready', context: { mediaId: 'a1' }, textAnalysis: null, visual: null });
+    expect(run([{ type: 'context', context: { ...c, mediaId: 'other' } }], ready)).toBe(ready);
+    expect(run([{ type: 'context', context: c }])).toBe(initialIngestionState);
+    expect(run([{ type: 'select', fileName: 'y' }], withContext)).toEqual({ status: 'validating', fileName: 'y' });
   });
   it('a new selection discards the previous extraction', () => {
     const ex = { ...createExtraction('a1', 'now'), status: 'completed' as const };

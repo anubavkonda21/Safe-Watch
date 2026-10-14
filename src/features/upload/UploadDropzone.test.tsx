@@ -8,6 +8,7 @@ import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
+import { readyContext } from '@/test/contextAnalysis';
 import { processingVisual, readyVisual } from '@/test/visualAnalysis';
 import { filtersStore } from '@/features/filters/filtersStore';
 import { unavailableExtraction } from '@/domain/extraction/extraction';
@@ -502,5 +503,71 @@ describe('UploadDropzone visual evidence — a separate step after extraction, i
     drop(makeFile('clip.mp4', HEADERS.mp4));
     await screen.findByText('Text: ready');
     expect(await screen.findByText('Visual: not enabled')).toBeInTheDocument();
+  });
+});
+
+describe('UploadDropzone contextual evidence — correlates once text and visual evidence have finished', () => {
+  const readyAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: ffprobeMeta, createdAt: 'x', failure: null,
+  });
+  const ingestionWith = (context: MediaUploader['loadContext'], over: Partial<MediaUploader> = {}) =>
+    createMediaIngestion({
+      uploader: {
+        upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null } }),
+        waitForExtraction: async (id) => completedExtraction(id), waitForTextAnalysis: async (id) => readyTextAnalysis(id), waitForVisualAnalysis: async (id) => readyVisual(id),
+        loadContext: context, remove: vi.fn(async () => undefined), ...over,
+      },
+      maxBytes: 10 * MB,
+    });
+
+  it('shows the context timeline after the evidence steps, lets the user open one, and still says Analysis: not started', async () => {
+    render(<UploadDropzone ingestion={ingestionWith(async (id) => readyContext(id))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Context: ready')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Context timeline' })).toBeInTheDocument();
+    await userEvent.click(screen.getAllByRole('button', { name: /^Context / })[0]!);
+    expect(screen.getByRole('region', { name: /^Evidence for context/ })).toHaveTextContent('Started this context');
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/(video|media|content|scene) (is|are) (safe|unsafe)|analysis (is )?complete|\bunsafe\b/i);
+  });
+
+  it('waits for BOTH evidence steps: context is requested only after text and visual analysis have finished', async () => {
+    let finishVisual!: () => void;
+    const loadContext = vi.fn(async (id: string) => readyContext(id));
+    render(<UploadDropzone ingestion={ingestionWith(loadContext, { waitForVisualAnalysis: (id) => new Promise((resolve) => { finishVisual = () => resolve(readyVisual(id)); }) })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Text: ready')).toBeInTheDocument();
+    expect(screen.getByText('Context: in progress')).toBeInTheDocument();
+    expect(loadContext).not.toHaveBeenCalled();
+    await act(async () => finishVisual());
+    expect(await screen.findByText('Context: ready')).toBeInTheDocument();
+    expect(loadContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failure of the context step is its own message and leaves media, extraction, text and visual untouched', async () => {
+    render(<UploadDropzone ingestion={ingestionWith(async () => { throw new MediaIngestionError('server-unreachable'); })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Context: unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Contextual evidence' })).toHaveTextContent('Evidence could not be grouped by time');
+    expect(screen.getByText('Text: ready')).toBeInTheDocument();
+    expect(screen.getByText('Visual: ready')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
+  });
+
+  it('does not request context when extraction failed', async () => {
+    const loadContext = vi.fn(async (id: string) => readyContext(id));
+    render(<UploadDropzone ingestion={ingestionWith(loadContext, { waitForExtraction: async (id) => unavailableExtraction(id, 'x', 'timeout') })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('took too long'));
+    expect(loadContext).not.toHaveBeenCalled();
+    expect(screen.queryByRole('region', { name: 'Contextual evidence' })).not.toBeInTheDocument();
+  });
+
+  it('partial evidence: a missing visual step is named inside the context', async () => {
+    render(<UploadDropzone ingestion={ingestionWith(async (id) => readyContext(id, { visual: null }))} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Context: partial')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Contextual evidence' })).toHaveTextContent('Visual evidence is not enabled on this server');
   });
 });

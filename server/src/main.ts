@@ -66,6 +66,7 @@ const mediaService = new MediaService({
   extraction,
   textAnalysis,
   visualAnalysis,
+  context: config.context,
   logger,
   limits: config,
 });

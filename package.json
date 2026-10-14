@@ -19,6 +19,7 @@
     "check:extraction": "tsx scripts/extraction-check.ts",
     "check:speech": "tsx scripts/speech-check.ts",
     "check:vision": "tsx scripts/vision-check.ts",
+    "check:context": "tsx scripts/context-bench.ts",
     "build:vision": "bash scripts/build-vision-helper.sh",
     "fetch:vision-assets": "bash scripts/download-vision-assets.sh"
   },

@@ -1,6 +1,7 @@
 import type { AnalysisState } from '../analysis/job';
 import type { ExtractionState, MediaExtraction } from '../extraction/extraction';
 import type { TextAnalysis, TextAnalysisState } from '../text/textAnalysis';
+import type { ContextAnalysis } from '../context/contextAnalysis';
 import type { VisualAnalysis, VisualState } from '../vision/visualAnalysis';
 import type { MediaAsset } from '../media/asset';
 import type { MediaErrorCode } from '../media/errors';
@@ -14,6 +15,7 @@ export const API_PATHS = {
   media: '/api/media',
   extraction: (id: string) => `/api/media/${encodeURIComponent(id)}/extraction`,
   transcript: (id: string) => `/api/media/${encodeURIComponent(id)}/transcript`,
+  context: (id: string) => `/api/media/${encodeURIComponent(id)}/context`,
   visual: (id: string) => `/api/media/${encodeURIComponent(id)}/visual`,
   frame: (id: string, frameId: string) => `/api/media/${encodeURIComponent(id)}/frames/${encodeURIComponent(frameId)}`,
 } as const;
@@ -49,6 +51,10 @@ export interface MediaResource {
   /** Visual evidence stage (frame observations). Not a safety analysis. */
   visual: VisualState;
   analysis: AnalysisState;
+}
+
+export interface ContextResponse {
+  context: ContextAnalysis;
 }
 
 export interface VisualAnalysisResponse {

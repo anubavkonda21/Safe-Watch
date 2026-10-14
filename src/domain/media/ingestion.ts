@@ -1,6 +1,7 @@
 import type { AnalysisStatus } from '../analysis/job';
 import type { MediaExtraction } from '../extraction/extraction';
 import type { TextAnalysis } from '../text/textAnalysis';
+import type { ContextAnalysis } from '../context/contextAnalysis';
 import type { VisualAnalysis } from '../vision/visualAnalysis';
 import type { MediaAsset } from './asset';
 import { toFailure, type MediaFailure } from './errors';
@@ -27,7 +28,7 @@ export type IngestionState =
   | { status: 'validating'; fileName: string }
   | { status: 'accepted'; asset: MediaAsset }
   | { status: 'processing'; asset: MediaAsset; phase: ProcessingPhase; uploadFraction: number | null }
-  | { status: 'ready'; asset: MediaAsset; analysis: AnalysisStatus; extraction: MediaExtraction | null; textAnalysis: TextAnalysis | null; visual: VisualAnalysis | null }
+  | { status: 'ready'; asset: MediaAsset; analysis: AnalysisStatus; extraction: MediaExtraction | null; textAnalysis: TextAnalysis | null; visual: VisualAnalysis | null; context: ContextAnalysis | null }
   | { status: 'failed'; failure: MediaFailure };
 
 export type ProcessingPhase = 'uploading' | 'inspecting';
@@ -41,6 +42,7 @@ export type IngestionEvent =
   | { type: 'extraction'; extraction: MediaExtraction }
   | { type: 'text-analysis'; textAnalysis: TextAnalysis }
   | { type: 'visual-analysis'; visual: VisualAnalysis }
+  | { type: 'context'; context: ContextAnalysis }
   | { type: 'fail'; error: unknown }
   | { type: 'reset' };
 
@@ -74,7 +76,7 @@ export function ingestionReducer(state: IngestionState, event: IngestionEvent): 
     }
     case 'ready':
       return state.status === 'processing'
-        ? { status: 'ready', asset: { ...event.asset, status: 'ready' }, analysis: event.analysis ?? 'not_started', extraction: null, textAnalysis: null, visual: null }
+        ? { status: 'ready', asset: { ...event.asset, status: 'ready' }, analysis: event.analysis ?? 'not_started', extraction: null, textAnalysis: null, visual: null, context: null }
         : state;
     case 'extraction':
       // Extraction belongs to the ready asset; updates for a replaced asset are ignored.
@@ -87,6 +89,8 @@ export function ingestionReducer(state: IngestionState, event: IngestionEvent): 
       return state.status === 'ready' && state.asset.id === event.textAnalysis.mediaId ? { ...state, textAnalysis: event.textAnalysis } : state;
     case 'visual-analysis':
       return state.status === 'ready' && state.asset.id === event.visual.mediaId ? { ...state, visual: event.visual } : state;
+    case 'context':
+      return state.status === 'ready' && state.asset.id === event.context.mediaId ? { ...state, context: event.context } : state;
     case 'reset':
       return state.status === 'validating' || state.status === 'processing' ? state : initialIngestionState;
   }

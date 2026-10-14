@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import type { MediaIngestion } from '@/application/mediaIngestion';
 import { unavailableTextAnalysis, type TextAnalysisIssueCode } from '@/domain/text/textAnalysis';
+import { unavailableContext } from '@/domain/context/contextAnalysis';
 import { unavailableVisual, type VisualIssue } from '@/domain/vision/visualAnalysis';
 import { unavailableExtraction, type ExtractionErrorCode } from '@/domain/extraction/extraction';
 import type { MediaAsset } from '@/domain/media/asset';
@@ -109,6 +110,15 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
         }
       })();
       await Promise.all([text, visual]);
+
+      // Context correlates what the two evidence steps produced, so it starts once both have finished.
+      if (!live()) return;
+      try {
+        const context = await ingestion.loadContext(ready);
+        if (live()) dispatch({ type: 'context', context: context ?? unavailableContext(ready.id) });
+      } catch {
+        if (live()) dispatch({ type: 'context', context: unavailableContext(ready.id) });
+      }
     },
     [ingestion],
   );
