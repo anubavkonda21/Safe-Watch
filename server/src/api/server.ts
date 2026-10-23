@@ -4,6 +4,7 @@ import { API_PATHS, FILENAME_HEADER, type ApiErrorCode, type HealthResponse } fr
 import { MediaServiceError } from '../application/errors';
 import type { MediaService } from '../application/mediaService';
 import type { Logger } from '../application/ports';
+import { MAX_SAFETY_BODY_BYTES, parseSafetyTerms, readLimitedBody } from './safetyRequest';
 import { applyCors } from './cors';
 import { STATUS_FOR, errorBody } from './errors';
 
@@ -94,6 +95,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ApiDeps):
     const transcriptMatch = /^\/api\/media\/([^/]+)\/transcript$/.exec(path);
     if (transcriptMatch?.[1] && req.method === 'GET') {
       return sendJson(res, 200, { textAnalysis: deps.mediaService.getTextAnalysis(transcriptMatch[1], { words: url.searchParams.get('words') !== 'false' }) });
+    }
+
+    const safetyMatch = /^\/api\/media\/([^/]+)\/safety-findings$/.exec(path);
+    if (safetyMatch?.[1] && (req.method === 'GET' || req.method === 'POST')) {
+      let terms: ReturnType<typeof parseSafetyTerms> = [];
+      if (req.method === 'POST') {
+        consumedBody = true;
+        terms = parseSafetyTerms(await readLimitedBody(req, MAX_SAFETY_BODY_BYTES), req.headers['content-type']);
+      }
+      return sendJson(res, 200, { safety: await deps.mediaService.getSafetyFindings(safetyMatch[1], terms) });
     }
 
     const contextMatch = /^\/api\/media\/([^/]+)\/context$/.exec(path);

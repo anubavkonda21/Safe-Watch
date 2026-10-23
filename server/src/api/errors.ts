@@ -10,6 +10,7 @@ export const STATUS_FOR: Record<ApiErrorCode, number> = {
   STORAGE_FAILED: 500,
   PROCESSING_TIMEOUT: 504,
   SERVER_BUSY: 503,
+  INVALID_REQUEST: 400,
   NOT_FOUND: 404,
   INTERNAL_ERROR: 500,
 };
@@ -25,6 +26,7 @@ export const MESSAGE_FOR: Record<ApiErrorCode, string> = {
   STORAGE_FAILED: 'The file could not be stored.',
   PROCESSING_TIMEOUT: 'Processing took too long.',
   SERVER_BUSY: 'The server is busy. Try again shortly.',
+  INVALID_REQUEST: 'The request is not valid.',
   NOT_FOUND: 'Not found.',
   INTERNAL_ERROR: 'Something went wrong on the server.',
 };

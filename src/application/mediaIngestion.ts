@@ -1,6 +1,7 @@
 import type { AnalysisStatus } from '@/domain/analysis/job';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { SafetyAnalysis } from '@/domain/safety/finding';
 import type { ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import type { MediaAsset } from '@/domain/media/asset';
@@ -40,6 +41,8 @@ export interface MediaIngestion {
   analyzeVisual(asset: MediaAsset, hooks?: { onUpdate?: (visual: VisualAnalysis) => void }): Promise<VisualAnalysis | null>;
   /** Server mode: loads the contextual evidence once speech, subtitles and visual analysis have finished. Local mode, or an uploader without it: resolves null. */
   loadContext(asset: MediaAsset): Promise<ContextAnalysis | null>;
+  /** Server mode: safety findings for the given flagged terms, from the evidence already produced. Local mode, or an uploader without it: resolves null. */
+  loadSafetyFindings(asset: MediaAsset, terms: ReadonlyArray<{ phrase: string; matchMode: string }>, hooks?: { signal?: AbortSignal }): Promise<SafetyAnalysis | null>;
   /** Best-effort removal of server-side data for a finished asset. */
   remove(asset: MediaAsset): Promise<void>;
 }
@@ -114,6 +117,11 @@ export function createMediaIngestion(deps: MediaIngestionDeps): MediaIngestion {
     async loadContext(asset) {
       if (!deps.uploader?.loadContext) return null;
       return deps.uploader.loadContext(asset.id);
+    },
+
+    async loadSafetyFindings(asset, terms, hooks = {}) {
+      if (!deps.uploader?.loadSafetyFindings) return null;
+      return deps.uploader.loadSafetyFindings(asset.id, terms, hooks);
     },
 
     async remove(asset) {

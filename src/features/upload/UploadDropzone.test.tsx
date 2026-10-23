@@ -8,6 +8,7 @@ import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
+import { safetyFor } from '@/test/safetyAnalysis';
 import { readyContext } from '@/test/contextAnalysis';
 import { processingVisual, readyVisual } from '@/test/visualAnalysis';
 import { filtersStore } from '@/features/filters/filtersStore';
@@ -569,5 +570,58 @@ describe('UploadDropzone contextual evidence — correlates once text and visual
     drop(makeFile('clip.mp4', HEADERS.mp4));
     expect(await screen.findByText('Context: partial')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Contextual evidence' })).toHaveTextContent('Visual evidence is not enabled on this server');
+  });
+});
+
+describe('UploadDropzone safety classification foundation — after the evidence steps, for the user’s flagged terms', () => {
+  const readyAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: ffprobeMeta, createdAt: 'x', failure: null,
+  });
+  const ingestionWith = (safety: MediaUploader['loadSafetyFindings'], over: Partial<MediaUploader> = {}) =>
+    createMediaIngestion({
+      uploader: {
+        upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null } }),
+        waitForExtraction: async (id) => completedExtraction(id), waitForTextAnalysis: async (id) => readyTextAnalysis(id), waitForVisualAnalysis: async (id) => readyVisual(id),
+        loadContext: async (id) => readyContext(id), loadSafetyFindings: safety, remove: vi.fn(async () => undefined), ...over,
+      },
+      maxBytes: 10 * MB,
+    });
+
+  it('waits for the context, then shows real support status per category and still says Analysis: not started', async () => {
+    window.localStorage.clear(); filtersStore.reload();
+    filtersStore.add('safe watch', 'phrase');
+    const load = vi.fn(async (id: string) => safetyFor(id, [['safe watch', 'phrase']]));
+    render(<UploadDropzone ingestion={ingestionWith(load)} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByRole('list', { name: 'Categories' })).toBeInTheDocument();
+    expect(await screen.findByRole('list', { name: 'Findings' })).toBeInTheDocument();
+    expect(load).toHaveBeenCalledWith('srv-1', [{ phrase: 'safe watch', matchMode: 'phrase' }], expect.anything());
+    expect(screen.getAllByText('Not supported')).toHaveLength(4);
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/(video|media|content|scene) (is|are) (safe|unsafe)|analysis (is )?complete|\bunsafe\b/i);
+  });
+
+  it('does not ask the server before the context is ready', async () => {
+    window.localStorage.clear(); filtersStore.reload();
+    let finishContext!: () => void;
+    const load = vi.fn(async (id: string) => safetyFor(id, []));
+    render(<UploadDropzone ingestion={ingestionWith(load, { loadContext: (id) => new Promise((resolve) => { finishContext = () => resolve(readyContext(id)); }) })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Context: in progress')).toBeInTheDocument();
+    expect(load).not.toHaveBeenCalled();
+    await act(async () => finishContext());
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  });
+
+  it('a failure of the safety step is its own notice and leaves every other stage untouched', async () => {
+    window.localStorage.clear(); filtersStore.reload();
+    render(<UploadDropzone ingestion={ingestionWith(async () => { throw new MediaIngestionError('server-unreachable'); })} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Safety classification is not available')).toBeInTheDocument();
+    expect(screen.getByText('Context: ready')).toBeInTheDocument();
+    expect(screen.getByText('Visual: ready')).toBeInTheDocument();
+    expect(screen.getByText('Text: ready')).toBeInTheDocument();
+    expect(screen.getByText('Media: ready')).toBeInTheDocument();
   });
 });

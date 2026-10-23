@@ -23,6 +23,7 @@ import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
 import { TextBadge, TranscriptPanel } from './TranscriptPanel';
 import { VisualBadge, VisualPanel } from './VisualPanel';
 import { ContextBadge, ContextPanel } from './ContextPanel';
+import { SafetyPanel } from './SafetyPanel';
 import { useMediaIngestion } from './useMediaIngestion';
 import './upload.css';
 
@@ -132,6 +133,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
           textAnalysis={state.status === 'ready' ? state.textAnalysis : null}
           visual={state.status === 'ready' ? state.visual : null}
           context={state.status === 'ready' ? state.context : null}
+          ingestion={ingestion}
           mode={ingestion.mode}
           onReplace={openPicker}
         />
@@ -167,11 +169,12 @@ interface AssetSummaryProps {
   textAnalysis: TextAnalysis | null;
   visual: VisualAnalysis | null;
   context: ContextAnalysis | null;
+  ingestion: MediaIngestion;
   mode: 'local' | 'server';
   onReplace: () => void;
 }
 
-function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, visual, context, mode, onReplace }: AssetSummaryProps) {
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, visual, context, ingestion, mode, onReplace }: AssetSummaryProps) {
   const m = asset.metadata;
   const ready = status === 'ready';
   const uploading = status === 'processing' && phase === 'uploading';
@@ -225,13 +228,14 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
       {ready && mode === 'server' && <ExtractionPanel extraction={extraction} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <TranscriptPanel analysis={textAnalysis} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <ContextPanel context={context} />}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <SafetyPanel ingestion={ingestion} asset={asset} evidenceReady={context !== null && context.status !== 'pending'} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <VisualPanel analysis={visual} frameUrl={(frameId) => `${config.apiBaseUrl}${API_PATHS.frame(asset.id, frameId)}`} />}
       {ready && (
         <div className="sw-upload__alert">
           <Alert tone="info" title={mode === 'server' ? 'Stored temporarily' : 'Analysis has not started'}>
             {mode === 'server'
-              ? 'Your video was uploaded to the SafeWatch server and is deleted automatically. Safety analysis arrives in a later release.'
-              : 'This file stays on your device. Safety analysis arrives in a later release.'}
+              ? 'Your video was uploaded to the SafeWatch server and is deleted automatically. Only flagged-word checks exist so far; a full safety analysis arrives in a later release.'
+              : 'This file stays on your device. A full safety analysis arrives in a later release.'}
           </Alert>
         </div>
       )}

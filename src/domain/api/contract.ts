@@ -1,6 +1,7 @@
 import type { AnalysisState } from '../analysis/job';
 import type { ExtractionState, MediaExtraction } from '../extraction/extraction';
 import type { TextAnalysis, TextAnalysisState } from '../text/textAnalysis';
+import type { SafetyAnalysis } from '../safety/finding';
 import type { ContextAnalysis } from '../context/contextAnalysis';
 import type { VisualAnalysis, VisualState } from '../vision/visualAnalysis';
 import type { MediaAsset } from '../media/asset';
@@ -15,6 +16,7 @@ export const API_PATHS = {
   media: '/api/media',
   extraction: (id: string) => `/api/media/${encodeURIComponent(id)}/extraction`,
   transcript: (id: string) => `/api/media/${encodeURIComponent(id)}/transcript`,
+  safety: (id: string) => `/api/media/${encodeURIComponent(id)}/safety-findings`,
   context: (id: string) => `/api/media/${encodeURIComponent(id)}/context`,
   visual: (id: string) => `/api/media/${encodeURIComponent(id)}/visual`,
   frame: (id: string, frameId: string) => `/api/media/${encodeURIComponent(id)}/frames/${encodeURIComponent(frameId)}`,
@@ -33,6 +35,7 @@ export const API_ERROR_CODES = [
   'STORAGE_FAILED',
   'PROCESSING_TIMEOUT',
   'SERVER_BUSY',
+  'INVALID_REQUEST',
   'NOT_FOUND',
   'INTERNAL_ERROR',
 ] as const;
@@ -51,6 +54,15 @@ export interface MediaResource {
   /** Visual evidence stage (frame observations). Not a safety analysis. */
   visual: VisualState;
   analysis: AnalysisState;
+}
+
+export interface SafetyResponse {
+  safety: SafetyAnalysis;
+}
+
+/** Body of `POST /api/media/:id/safety-findings`: the flagged terms to look for. Nothing else is accepted. */
+export interface SafetyRequestBody {
+  terms: Array<{ phrase: string; matchMode: 'exact' | 'case-insensitive' | 'word-boundary' | 'phrase' }>;
 }
 
 export interface ContextResponse {
@@ -99,6 +111,7 @@ const API_TO_MEDIA: Record<ApiErrorCode, MediaErrorCode> = {
   STORAGE_FAILED: 'storage-failure',
   PROCESSING_TIMEOUT: 'timeout',
   SERVER_BUSY: 'server-busy',
+  INVALID_REQUEST: 'processing-failed',
   NOT_FOUND: 'processing-failed',
   INTERNAL_ERROR: 'processing-failed',
 };

@@ -1,6 +1,6 @@
 import type { MediaResponse } from '@/domain/api/contract';
 import { FfmpegMediaProcessor } from '../src/infrastructure/ffmpeg/ffmpegMediaProcessor';
-import { fixture, hasFfmpeg, startTestApp, upload, waitForStatus, type TestApp } from './helpers';
+import { eventually, fixture, hasFfmpeg, startTestApp, upload, waitForStatus, type TestApp } from './helpers';
 
 let app: TestApp;
 afterEach(async () => { await app?.close(); });
@@ -39,6 +39,8 @@ describe.skipIf(!hasFfmpeg)('end-to-end: upload → storage → FFprobe → Medi
     const { media } = (await (await upload(app, new Uint8Array(fixture('truncated.mp4')), 'cut.mp4')).json()) as MediaResponse;
     const failed = await waitForStatus(app, media.asset.id, ['failed']);
     expect(failed.asset.failure?.code).toBe('invalid-media');
+    // The record turns `failed` before the file is deleted (deletion is awaited right after), so wait for the removal instead of racing it.
+    await eventually(async () => (await app.files()).length === 0);
     expect(await app.files()).toEqual([]);
   });
 });

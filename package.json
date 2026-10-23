@@ -20,6 +20,8 @@
     "check:speech": "tsx scripts/speech-check.ts",
     "check:vision": "tsx scripts/vision-check.ts",
     "check:context": "tsx scripts/context-bench.ts",
+    "eval:safety": "tsx scripts/safety-eval.ts",
+    "check:safety": "tsx scripts/safety-bench.ts",
     "build:vision": "bash scripts/build-vision-helper.sh",
     "fetch:vision-assets": "bash scripts/download-vision-assets.sh"
   },

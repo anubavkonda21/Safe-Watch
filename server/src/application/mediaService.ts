@@ -9,6 +9,9 @@ import type { TextAnalysis } from '@/domain/text/textAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import { buildContextAnalysis, type ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { ContextConfig } from '@/domain/context/contextEvent';
+import { analyzeSafety } from '@/domain/safety/analyze';
+import type { SafetyAnalysis } from '@/domain/safety/finding';
+import type { CustomFilter } from '@/domain/text/customFilter';
 import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
@@ -183,6 +186,18 @@ export class MediaService {
       text: record.text, visual: record.visual, frameStepSeconds: record.extraction.frames?.effectiveIntervalSeconds ?? null, config: this.deps.context,
     });
     return options.evidence === false ? { ...analysis, events: analysis.events.map((e) => ({ ...e, members: [], ambient: [] })) } : analysis;
+  }
+
+  /**
+   * Safety findings: runs the available safety classifiers over the evidence that earlier stages already produced (the
+   * correlated context and the text timeline); nothing is re-extracted and no media is read. `terms` are the flagged terms
+   * to look for (already validated). Unsupported categories and missing inputs are reported, never silently omitted.
+   */
+  async getSafetyFindings(id: string, terms: readonly CustomFilter[]): Promise<SafetyAnalysis> {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record) throw new MediaServiceError('NOT_FOUND');
+    const context = this.getContext(id);
+    return analyzeSafety({ mediaId: record.asset.id, context, text: record.text, terms });
   }
 
   /**

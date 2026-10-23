@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 7 — safety classification foundation.** SafeWatch now has a safety taxonomy, a typed finding contract (with evidence references, explicit uncertainty and abstention) and a replaceable classifier port. **One category is genuinely implemented: flagged terms** (words and phrases you list, found in speech and subtitles by a rule-based matcher). **Sexual content, violence, graphic injury and drug-related content are NOT supported**: no feasible local classifier exists (see below), and object labels or people in a frame are never treated as evidence of them. There is **no overall safety score and no verdict**, and nothing is muted, censored, blurred, skipped or warned about. See `CHECKPOINT_7_REPORT.md`.
+
 **Checkpoint 6 — cross-modal context and temporal reasoning foundation.** Speech, subtitle and visual evidence from the earlier steps is now correlated on the media timeline into **context events**: groups of evidence that belong together in time, each keeping every piece of evidence with its own provenance and confidence, and an explanation of why it was grouped. It is deterministic and local (no model, no LLM). **It does not classify safety: no safety score, no verdict, and nothing is muted, censored, blurred or skipped.** See `CHECKPOINT_6_REPORT.md`.
 
 **Checkpoint 5 — visual intelligence foundation.** The frames extraction already produces are now described by a local image model (Apple Vision on macOS, behind a replaceable port): labels, located people/animals and recognised text, each with a media timestamp, shown as a frame grid with a preview. This is **visual evidence only**: there is **no safety classification, no score, no verdict, and nothing is muted, censored, blurred or skipped**. Details below and in `CHECKPOINT_5_REPORT.md`.
@@ -34,6 +36,9 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Visual timeline, frame API and "Visual evidence" UI with frame preview | IMPLEMENTED — evidence only |
 | Context events: speech, subtitle and visual evidence correlated by media time, with provenance, explanation and per-source confidence | IMPLEMENTED — grouping only |
 | Context API and timeline UI with evidence drill-down | IMPLEMENTED |
+| Safety taxonomy, finding contract, classifier port | IMPLEMENTED |
+| Flagged-term classifier (speech and subtitles; rule based) with evaluation fixtures | IMPLEMENTED — occurrence of listed words only, not meaning |
+| Sexual content, violence, graphic injury, drug-related content classification | NOT SUPPORTED — no feasible local classifier (documented blocker) |
 | Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
@@ -156,7 +161,7 @@ SubtitleTrack (text cues) ──────────────────
 - **API:** `GET /api/media/:id/transcript` (`?words=false` omits word timestamps). `/api/health` reports only `speech: {provider, available}`.
 - **Timestamps:** media time in milliseconds. Word **start** times are reliable (DTW alignment, ≈0.1 s in tests); a word's **end** is an upper bound.
 - **Language:** detected per track; never translated. Measured limits: Hindi on `base` is written in Urdu script; code-switched Hindi/English is not transcribed faithfully by either model; the brand name "SafeWatch" is heard as "safe watch" (the `phrase` match mode handles it).
-- **Custom filters:** a "Custom filters" section lets the visitor add words/phrases (Whole word, Phrase, Contains, Exact case), enable/disable and remove them. They stay in the browser; matches are listed with source, time and confidence. SafeWatch does not mute or alter anything.
+- **Custom filters:** a "Custom filters" section lets the visitor add words/phrases (Whole word, Phrase, Contains, Exact case), enable/disable and remove them. They are stored in the browser; the Transcript panel matches them there, and the enabled terms are sent to your SafeWatch server for the safety-findings request only (not stored, not logged); matches are listed with source, time and confidence. SafeWatch does not mute or alter anything.
 - Measure it yourself: `npm run check:speech -- video.mp4`. Details, decisions, privacy and limits: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §26.
 
 ## Visual intelligence (Checkpoint 5)
@@ -189,6 +194,21 @@ visual observations ┘        validate · integer ms · dedupe · sort       on
 - **What it is not:** it says nothing about whether content is acceptable. There is no safety field in the model, API or UI.
 - **API:** `GET /api/media/:id/context` (`?evidence=false` omits members). It is computed on request from the earlier stages (pure, no file access). `status` is `pending`, `ready`, `partial` (a modality failed or is not enabled, and the response says which) or `unavailable`.
 - **Config:** `SAFEWATCH_CONTEXT_*` (see `.env.example`). Measure it: `npm run check:context`. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §28.
+
+## Safety classification (Checkpoint 7)
+
+```
+Custom filters (your words) ─┐
+TextAnalysis (CP4) ──────────┼─► FlaggedTermClassifier ─► SafetyFinding[] + CategoryReport[] ─► POST /api/media/:id/safety-findings ─► "Safety classification" UI
+ContextAnalysis (CP6) ───────┘     (SafetyClassifier port)        status · evidence · explanation · abstention
+```
+
+- **Taxonomy (`safewatch-taxonomy-1`):** `flagged-terms` (implemented, speech and subtitles), `sexual-content`, `violence`, `graphic-injury`, `drug-content` (all **unsupported**, each with what would count, what would not, its limits and the blocker). The report always lists all five, so an unsupported category can never be mistaken for a clean result.
+- **Finding:** category, taxonomy version, integer-millisecond range, `detected` or `uncertain`, evidence references (modality, time, source, context event, the source's own recognizer confidence), an explanation built from facts, warnings, classifier id. `rawScore` and `calibratedProbability` are `null`: a rule engine has no score and nothing was calibrated. No combined score and no verdict exist.
+- **Uncertain** means speech alone supports it and either the recognizer was unsure (lowest word confidence below 0.5, a documented policy threshold) or the subtitles shown at that time do not contain the term.
+- **Abstention:** no listed terms, or both text inputs unavailable, gives `abstained` (no negative claim). A missing input gives `partial` and names it. A classifier that throws is `abstained` with a fixed reason.
+- **API:** `POST /api/media/:id/safety-findings` with `{ "terms": [{ "phrase", "matchMode" }] }` (strict body, at most 100 terms and 32 KB); `GET` is the same with no terms. Computed from the earlier stages' results: nothing is re-extracted, no file is read.
+- **Evaluate it:** `npm run eval:safety` (43 labelled synthetic examples, including 6 known limitations), `npm run check:safety` (runtime). The fixtures are engineering fixtures, not a benchmark. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.
 
 ## Technology stack
 

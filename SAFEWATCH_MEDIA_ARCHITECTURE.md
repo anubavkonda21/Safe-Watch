@@ -362,7 +362,7 @@ Input is the `AudioAsset` produced by extraction; the speech layer never extract
 - **TextEvent** (`source: speech | subtitle`, start, end, text, language, trackId, confidence, words, evidence) is the common shape; subtitle events come from the extraction cues of **text** tracks only (image and failed tracks contribute none).
 - **Alignment** is deterministic and conservative: a speech event and subtitle cue(s) are linked only if they are within 1 s in time, in compatible languages (by primary language; `eng` = `en`), and their words overlap (Dice similarity ≥ 0.6). It compares a speech event with all nearby cues together (cues split sentences) and a cue with several speech segments. Result per event: `both`, `speech-only` or `subtitle-only`. *No link means "not corroborated", never "wrong"*. No semantic AI.
 - **CustomFilter** `{ id, phrase, normalizedPhrase, matchMode, enabled, createdAt }`. **Normalisation for matching:** NFKC, control/zero-width/bidi removed, curly quotes/apostrophes straightened, whitespace collapsed, optional lower-casing; punctuation is dropped by word tokenisation (inner apostrophes kept); diacritics are **not** stripped (“résumé” ≠ “resume”) and non-Latin scripts are preserved. **Modes:** `exact` (case-sensitive substring), `case-insensitive` (substring, may match inside words), `word-boundary` (whole words, case-insensitive), `phrase` (whole words ignoring spacing/punctuation between them, so “SafeWatch” matches the speech model's “safe watch”).
-- **TextMatch** `{ filterId, phrase, source, trackId, eventId, startSeconds, endSeconds, matchedText, confidence, granularity (word|segment|cue), matchMode }`: word-level times when word timestamps exist, otherwise the whole segment/cue (honestly labelled). Confidence is the lowest known confidence of the matched words, `null` if unknown or for subtitles. Matching is pure, bounded (10,000 matches) and treats phrases as plain text (no regular expressions are built from user input). Filters live in the user's browser (localStorage) and matching runs there; filters are never sent to the server.
+- **TextMatch** `{ filterId, phrase, source, trackId, eventId, startSeconds, endSeconds, matchedText, confidence, granularity (word|segment|cue), matchMode }`: word-level times when word timestamps exist, otherwise the whole segment/cue (honestly labelled). Confidence is the lowest known confidence of the matched words, `null` if unknown or for subtitles. Matching is pure, bounded (10,000 matches) and treats phrases as plain text (no regular expressions are built from user input). Filters live in the user's browser (localStorage) and the Transcript panel matches them there. (Checkpoint 7 change: the enabled terms are also sent to the server for the safety-findings request, see §29.5.)
 - **Not implemented:** muting, beeping, blurring, censoring, subtitle replacement, scene skipping, scoring, any "safe/unsafe" verdict. Matches are evidence the future filtering engine will consume.
 
 ### 26.6 Lifecycle, API, limits
@@ -497,3 +497,74 @@ All four are server configuration (`SAFEWATCH_CONTEXT_*`) and are echoed in the 
 ### 28.7 Performance
 
 Synthetic evidence, one speech segment and subtitle cue every 6 s and 8 observations per frame every 3 s (`npm run check:context`): 180 items (1 min) 0.24 ms; 5 400 (30 min) 5.5 ms; 64 800 (6 h) 84 ms; 259 200 (24 h) 362 ms: about 1.3 µs per item, linear. The real inputs are bounded (at most 300 frames and an hour of speech by default), so it is far cheaper than extraction or inference.
+
+---
+
+## 29. Safety classification foundation (Checkpoint 7)
+
+The first layer that can say "this evidence contains X". It is deliberately narrow: **one category is implemented (flagged terms in speech and subtitles); four are not supported.** It never reports a verdict, an overall score or a probability that was not measured, and it never acts on a finding (no muting, blurring, skipping or warning).
+
+```
+ TextAnalysis.timeline (CP4)  ─┐                                     src/domain/safety
+ ContextAnalysis (CP6)        ─┼─► analyzeSafety ─► SafetyClassifier (port) ─► CategoryResult[] ─► SafetyAnalysis
+ enabled flagged terms        ─┘        ▲ FlaggedTermClassifier (rule based, deterministic)
+                                        └ a future model-backed classifier plugs in here (async allowed)
+ MediaService.getSafetyFindings ─► POST|GET /api/media/:id/safety-findings   (pure function of in-memory results, no file access)
+```
+
+### 29.1 Taxonomy (`safewatch-taxonomy-1`)
+
+Defined in `src/domain/safety/taxonomy.ts` with, per category: what counts, what does not, supported modalities, limitations and (if unsupported) the blocker.
+
+| Category | Status | Evidence read | Notes |
+| --- | --- | --- | --- |
+| `flagged-terms` | **implemented** | speech, subtitles | Occurrence of a user-listed word or phrase. No built-in word list ships, so "profanity" is covered only for words the user lists. On-screen (OCR) text is not scanned yet |
+| `sexual-content` | unsupported | none | Blocker below |
+| `violence` | unsupported | none | A weapon-shaped object, a sport or a loud noise is not evidence |
+| `graphic-injury` | unsupported | none | Red colours, medical or cooking scenes are not evidence |
+| `drug-content` | unsupported | none | A drug word in an educational or news sentence is not use; users can list words under flagged terms, which says only where the words occur |
+
+No category is `experimental`: nothing runs that is not evaluated.
+
+### 29.2 Why four categories are unsupported (measured, not assumed)
+
+- **Apple sensitive-content analysis** (`SensitiveContentAnalysis`, on-device, the only local nudity classifier on macOS) was tested with a Swift helper: it compiles, but the analysis fails with "User Safety either not entitled for client or not enabled": it needs a signed app with a restricted entitlement and a system setting, which an unsigned command-line helper cannot have.
+- **No local model is installed** for sexual content, violence, gore or drugs, and `models/` holds only the speech model. Adding one means hundreds of MB to GB of weights plus a runtime (the earlier ONNX measurement was 145 to 301 MB before any weights), or a vision-language model producing free text without calibrated outputs, or a hosted service (excluded: local only).
+- **No labelled evaluation data** for these categories can be obtained and committed responsibly (sensitive content, licensing), and a classifier that cannot be evaluated cannot be claimed.
+- The CP5 image labels, person boxes and OCR are descriptive; using them as a stand-in ("a person" for sexual content, "a knife" for violence) would be exactly the misleading substitution this checkpoint rules out.
+
+So the architecture is ready (taxonomy, contract, port, UI, evaluation harness) and the capability is not. The report shows these categories as `not-supported`; they are never silently `evaluated` with zero findings.
+
+### 29.3 Contract
+
+`SafetyFinding { id (sf-<category>-<n>), category, taxonomyVersion, startMs, endMs, status, rawScore, calibratedProbability, evidence[], explanation, warnings[], classifier, attributes }`.
+
+- **Four things are kept apart:** raw classifier output (`rawScore`, `null` for rule engines), a calibrated probability (`calibratedProbability`, `null` unless calibration was measured: it never is today, and the validator rejects a probability without a raw score), a policy threshold (documented below), and a verdict (does not exist). The only confidence carried through is the source's own (recognizer confidence per evidence reference).
+- **Status:** `detected` (positive condition holds in unqualified evidence) or `uncertain` (holds, evidence qualified; `warnings` say how). Unsupported categories and missing inputs are in the category report, not findings.
+- **Evidence:** modality, kind, integer milliseconds, source id, the context event that holds it, source confidence. Time is canonical integer milliseconds; the validator rejects fractional, negative or inverted ranges, evidence outside the finding, unknown categories, other taxonomy versions, probabilities outside [0, 1], empty explanations and "uncertain without a reason". Invalid findings are dropped and counted (`invalid-finding`), never repaired.
+- **Category report:** `evaluated` (ran over its full scope; zero findings means none found within that scope), `partial` (an input is missing and named), `abstained` (cannot run: no terms, text unavailable, classifier failed), `not-supported`.
+- **Analysis status:** `pending`, `ready` (every implemented category evaluated), `partial`, `not-evaluated`.
+
+### 29.4 The flagged-term classifier
+
+Reuses the CP4 matcher (`findTextMatches`: NFKC, case folding, zero-width removal, whole-word, phrase, contains and exact modes, word timing) so there is one implementation of matching. It adds: clustering of overlapping matches of the same term across speech and subtitles into one finding with both as evidence (touching intervals count as overlapping; separate occurrences stay separate), the context event of each piece of evidence, status, and abstention.
+
+Policy (ours, documented, not probabilities): speech-only support is `uncertain` when the lowest word confidence is below **0.5** (strictly below) or when subtitle text covering the same time does not contain the term (`subtitle-disagrees`). A subtitle-only finding stays `detected` with a `speech-did-not-confirm` warning (the subtitle is written text; speech recognition misses words). Agreement of speech and subtitle makes a finding `detected` whatever the recognizer confidence. Timing is the matched word's when the transcript has word times, otherwise the whole line, and the finding says so (`coarse-timing`). The match list is capped at 10 000 (CP4 limit) and a `findings-truncated` warning says so.
+
+**Limits, stated:** it detects occurrence, not meaning (a listed word in an educational or quoted sentence is found; so is the same spelling in an unrelated sense); no stemming ("darned"), no leetspeak folding ("d4rn"), no spaced-out letters, no word split across subtitle cues; a word the recognizer misheard is a miss, and a miss is not evidence of absence.
+
+### 29.5 API, privacy, security
+
+`POST /api/media/:id/safety-findings` with `{ "terms": [{ "phrase", "matchMode" }] }`; `GET` runs it with no terms (`not-evaluated`, abstained). The body is strict: exactly that shape, at most 100 terms (the CP4 filter limit), phrases through the same normalisation and limits as the browser's filters, no duplicates, `application/json`, at most 32 KB (read with a hard cap); anything else is `400 INVALID_REQUEST` with a fixed message. Ids are validated like every media route (404). The client supplies only words to look for: never paths, evidence or settings; a path-like phrase is just a word. The result is computed from the in-memory results of earlier stages (no re-extraction, no file access, no subprocess, no model) and contains no paths.
+
+**Privacy change (stated plainly):** until Checkpoint 6 the user's custom filters never left the browser. Now the **enabled terms are sent to the SafeWatch server** for this request (the server is the same local-first process that already holds the media and transcript). They are used for that one request, not stored and not logged (a test asserts neither terms nor transcript text appear in logs). Nothing goes to a third party. Unchanged production gates (NOT solved): authentication (media ids are bearer tokens), rate limiting, disk quota, process sandboxing.
+
+### 29.6 Evaluation
+
+`src/domain/safety/evaluation`: a versioned dataset (`flagged-terms-eval` v1, 43 synthetic examples written for this repository, no media, no third-party data, mild placeholder terms) run through the real pipeline, and a harness that scores true and false positives and negatives, precision, recall, abstention and uncertain rates, interval overlap (IoU) and boundary error. Kinds: positives, benign lookalikes, normalisation, timestamp boundaries, ambiguous, contradictory, missing input, and **six known limitations labelled by human intent** that the matcher cannot get right (they stay in the metrics). `npm run eval:safety`; the test suite pins the numbers.
+
+Result: 43 examples, 37 behave as labelled, 6 known limitations, 0 unexpected failures; TP 28, FP 1, FN 5, TN 9; **precision 0.966, recall 0.848**; 3 abstentions (7%), 2 of 29 findings uncertain (7%); mean IoU 1.0 and maximum boundary error 0 ms where word timing exists. **These are engineering fixtures that pin documented behaviour: they say nothing about accuracy on real speech or real subtitles** (transcripts are given, so recognizer errors are out of the picture). The perfect scores on the first 37 are expected for hand-labelled fixtures against a deterministic matcher; the six known limitations are the honest part.
+
+### 29.7 Performance
+
+`npm run check:safety` (synthetic evidence, one sentence and its cue every 6 s, 12 timed words each): 1 min (20 text events) 0.1 ms with 3 terms, 1.6 ms with 100 terms; 30 min (600 events) 1.9 ms and 77 ms; 3 h (3 600 events) 13 ms and 78 ms. Memory stays near 10 to 130 MB heap. The 100-term runs use common words and hit the 10 000 match cap, which is why the 3 h run is no slower than 30 min. Response size grows with findings (3.4 MB for 3 500 findings), so a term list of very common words is an expensive request: bounded, not rate limited.

@@ -1,7 +1,8 @@
 import type { MediaUploader, UploadHooks } from '@/application/mediaUploader';
-import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse, type TextAnalysisResponse, type VisualAnalysisResponse, type ContextResponse } from '@/domain/api/contract';
+import { API_PATHS, FILENAME_HEADER, apiErrorToMediaError, isApiErrorCode, type ExtractionResponse, type MediaResource, type MediaResponse, type TextAnalysisResponse, type VisualAnalysisResponse, type ContextResponse, type SafetyResponse } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { SafetyAnalysis } from '@/domain/safety/finding';
 import type { ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 import { MediaIngestionError } from '@/domain/media/errors';
@@ -146,6 +147,28 @@ export class HttpMediaUploader implements MediaUploader {
     }
   }
 
+  async loadSafetyFindings(mediaId: string, terms: ReadonlyArray<{ phrase: string; matchMode: string }>, hooks: { signal?: AbortSignal } = {}): Promise<SafetyAnalysis> {
+    const deadline = Date.now() + this.pollTimeoutMs;
+    const url = `${this.options.baseUrl}${API_PATHS.safety(mediaId)}`;
+    let failures = 0;
+    for (;;) {
+      if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
+      try {
+        // Only words to look for are sent: never evidence, paths or settings.
+        const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ terms: terms.map((t) => ({ phrase: t.phrase, matchMode: t.matchMode })) }), signal: hooks.signal });
+        const body = parse(await res.text());
+        if (!res.ok || !isSafetyResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
+        failures = 0;
+        if (body.safety.status !== 'pending') return body.safety;
+      } catch (e) {
+        if (e instanceof MediaIngestionError) throw e;
+        if (++failures >= 3) throw new MediaIngestionError('server-unreachable');
+      }
+      if (Date.now() > deadline) throw new MediaIngestionError('timeout');
+      await new Promise((r) => setTimeout(r, this.pollIntervalMs));
+    }
+  }
+
   async remove(mediaId: string): Promise<void> {
     try {
       await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(mediaId)}`, { method: 'DELETE', keepalive: true });
@@ -216,6 +239,10 @@ function isExtractionResponse(v: unknown): v is ExtractionResponse {
 
 function isTextAnalysisResponse(v: unknown): v is TextAnalysisResponse {
   return typeof v === 'object' && v !== null && 'textAnalysis' in v && typeof (v as { textAnalysis: { status?: unknown } }).textAnalysis?.status === 'string';
+}
+
+function isSafetyResponse(v: unknown): v is SafetyResponse {
+  return typeof v === 'object' && v !== null && 'safety' in v && typeof (v as { safety: { status?: unknown } }).safety?.status === 'string';
 }
 
 function isContextResponse(v: unknown): v is ContextResponse {

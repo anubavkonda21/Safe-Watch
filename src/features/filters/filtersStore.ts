@@ -2,9 +2,12 @@ import { useSyncExternalStore } from 'react';
 import { createCustomFilter, parseStoredFilters, type CustomFilter, type FilterResult, type MatchMode } from '@/domain/text/customFilter';
 
 /**
- * Custom filters live in THIS browser only (localStorage): they are a
- * per-viewer convenience, never sent to the server, and matching runs in the
- * browser against the transcript the server returned. Stored data is
+ * Custom filters live in THIS browser (localStorage) and are a per-viewer
+ * convenience. The transcript matches shown in the Transcript panel are
+ * computed in the browser. Since Checkpoint 7 the ENABLED terms are also sent
+ * to the SafeWatch server, but only when the safety-findings request is made
+ * for the open video (see SafetyPanel): the server uses them for that one
+ * request, does not store them and does not log them. Stored data is
  * untrusted and re-validated on read. Every storage access is guarded
  * (private windows, blocked storage and quota errors must not break the page).
  */

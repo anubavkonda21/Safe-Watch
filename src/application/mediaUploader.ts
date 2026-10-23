@@ -1,6 +1,7 @@
 import type { MediaResource } from '@/domain/api/contract';
 import type { MediaExtraction } from '@/domain/extraction/extraction';
 import type { TextAnalysis } from '@/domain/text/textAnalysis';
+import type { SafetyAnalysis } from '@/domain/safety/finding';
 import type { ContextAnalysis } from '@/domain/context/contextAnalysis';
 import type { VisualAnalysis } from '@/domain/vision/visualAnalysis';
 
@@ -41,6 +42,11 @@ export interface MediaUploader {
    * evidence stages have finished. Resolves with a non-pending result. Optional: an uploader without it has no context.
    */
   loadContext?(mediaId: string, hooks?: { signal?: AbortSignal }): Promise<ContextAnalysis>;
+  /**
+   * Runs the safety classifiers over the evidence the server already holds, for the given flagged terms. Resolves with a
+   * non-pending result. Optional: an uploader without it has no safety findings.
+   */
+  loadSafetyFindings?(mediaId: string, terms: ReadonlyArray<{ phrase: string; matchMode: string }>, hooks?: { signal?: AbortSignal }): Promise<SafetyAnalysis>;
   /** Best-effort deletion of a stored upload. Never rejects. */
   remove(mediaId: string): Promise<void>;
 }

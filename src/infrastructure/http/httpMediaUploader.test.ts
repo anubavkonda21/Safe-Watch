@@ -4,6 +4,7 @@ import { HttpMediaUploader } from './httpMediaUploader';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
 import { processingVisual, readyVisual } from '@/test/visualAnalysis';
+import { safetyFor } from '@/test/safetyAnalysis';
 import { readyContext } from '@/test/contextAnalysis';
 import { unavailableContext } from '@/domain/context/contextAnalysis';
 import { failVisual } from '@/domain/vision/visualAnalysis';
@@ -167,6 +168,40 @@ describe('HttpMediaUploader', () => {
       const p = make().waitForExtraction('srv-1', { signal: ac.signal });
       ac.abort();
       await expect(p).rejects.toMatchObject({ code: 'upload-failed' });
+    });
+  });
+
+  describe('loadSafetyFindings', () => {
+    const respond = (a: unknown) => new Response(JSON.stringify({ safety: a }), { status: 200 });
+    it('POSTs only the terms (phrase and mode) as JSON and returns the analysis', async () => {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      const analysis = await safetyFor('srv-1', [['safe watch', 'phrase']]);
+      vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push({ url, init }); return respond(analysis); }));
+      const result = await make().loadSafetyFindings('srv-1', [{ phrase: 'safe watch', matchMode: 'phrase', id: 'secret-local-id', enabled: true } as never]);
+      expect(result.findings.length).toBeGreaterThan(0);
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe('http://api.test/api/media/srv-1/safety-findings');
+      expect(calls[0]!.init.method).toBe('POST');
+      expect((calls[0]!.init.headers as Record<string, string>)['content-type']).toBe('application/json');
+      expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ terms: [{ phrase: 'safe watch', matchMode: 'phrase' }] });
+    });
+    it('retries while pending, and returns a not-evaluated result as a value', async () => {
+      const pending = { ...(await safetyFor('srv-1', [])), status: 'pending' };
+      const seq = [pending, await safetyFor('srv-1', [])];
+      vi.stubGlobal('fetch', vi.fn(async () => respond(seq.shift())));
+      await expect(make().loadSafetyFindings('srv-1', [])).resolves.toMatchObject({ status: 'not-evaluated' });
+    });
+    it('times out while pending, reports an unreachable server, maps a rejected request, and stops on abort', async () => {
+      const pending = { ...(await safetyFor('srv-1', [])), status: 'pending' };
+      vi.stubGlobal('fetch', vi.fn(async () => respond(pending)));
+      await expect(make({ pollTimeoutMs: 30 }).loadSafetyFindings('srv-1', [])).rejects.toMatchObject({ code: 'timeout' });
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network'); }));
+      await expect(make().loadSafetyFindings('srv-1', [])).rejects.toMatchObject({ code: 'server-unreachable' });
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { code: 'INVALID_REQUEST' } }), { status: 400 })));
+      await expect(make().loadSafetyFindings('srv-1', [])).rejects.toMatchObject({ code: 'processing-failed' });
+      const ac = new AbortController();
+      ac.abort();
+      await expect(make().loadSafetyFindings('srv-1', [], { signal: ac.signal })).rejects.toMatchObject({ code: 'upload-failed' });
     });
   });
 
