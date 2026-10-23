@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach } from 'vitest';
 import { PlaybackCoordinator } from '@/domain/playback/coordinator';
+import { preferencesStore } from '@/features/preferences/preferencesStore';
 import type { SafetyLoad } from '@/features/upload/SafetyPanel';
 import { installFakeVideo, type FakeVideo } from '@/test/media';
 import { analysisWith, finding } from '@/test/safetyFindings';
@@ -10,6 +11,8 @@ import { PlaybackPanel } from './PlaybackPanel';
 const created: string[] = [];
 const revoked: string[] = [];
 beforeEach(() => {
+  // The default action and the warning settings are remembered in this browser: every test starts from a clean store.
+  window.localStorage.clear(); preferencesStore.reload();
   created.length = 0; revoked.length = 0;
   URL.createObjectURL = vi.fn(() => { const u = `blob:test-${created.length}`; created.push(u); return u; });
   URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u); });
@@ -163,6 +166,7 @@ describe('PlaybackPanel: boundaries do not depend on player events or animation 
   it('stops waking up when paused, and does not leak timers after unmount', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
+      preferencesStore.update({ warningsEnabled: false }); // heads-up timers have their own tests; this one is about mute and skip boundaries
       const { fake, unmount } = await mount(await ready());
       fireEvent.change(select(/0:10\.00 to 0:11\.00/), { target: { value: 'mute' } });
       fake.play();
@@ -289,13 +293,13 @@ describe('PlaybackPanel: media changes and failures', () => {
 });
 
 describe('PlaybackPanel: privacy and wording', () => {
-  it('does not persist choices and says so; it uses no storage', async () => {
+  it('does not persist per-finding choices or the master switch, and says what IS remembered', async () => {
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     await mount(await ready());
     await userEvent.selectOptions(select(/0:10\.00 to 0:11\.00/), 'mute');
     await userEvent.click(screen.getByRole('switch', { name: 'Automatic actions' }));
     expect(setItem).not.toHaveBeenCalled();
-    expect(panel()).toHaveTextContent('Your choices are kept for this video only and are not saved.');
+    expect(panel()).toHaveTextContent('Your choices for each finding are kept for this video only and are not saved; the default action and the warning settings are remembered in this browser.');
   });
   it('states what actions are and are not, with no overall verdict', async () => {
     await mount(await ready());

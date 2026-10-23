@@ -26,3 +26,12 @@
   .sw-filters__form { grid-template-columns: 1fr; padding: var(--sw-s-4); }
   .sw-filters__add { margin-top: 0; width: 100%; }
 }
+
+/* Editing, status and explanations */
+.sw-filters__how, .sw-filters__status { text-align: center; }
+.sw-filter__edit { padding: 0 var(--sw-s-3); min-height: var(--sw-touch); background: transparent; border: 0; border-radius: var(--sw-r-control); color: var(--sw-accent-hover); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.sw-filter__edit:hover { color: var(--sw-text); }
+.sw-filter__edit:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 2px; }
+.sw-filter__edit-form { display: grid; grid-template-columns: 1fr 180px; gap: var(--sw-s-3); align-items: start; width: 100%; padding: var(--sw-s-2) var(--sw-s-2) var(--sw-s-2) 0; }
+.sw-filter__edit-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--sw-s-2); }
+@media (max-width: 767px) { .sw-filter__edit-form { grid-template-columns: 1fr; } .sw-filter__edit-actions .sw-btn { flex: 1 1 120px; } }

@@ -13,22 +13,23 @@ Each checkpoint is reviewed before the next is started. Scopes below are intent,
 | 6 | Cross-Modal Context & Temporal Reasoning Foundation | Deterministic temporal correlation of speech, subtitle and visual evidence into context events with provenance, explanation and per-source confidence; context API and timeline UI. Grouping by time only: no safety classification | DONE |
 | 7 | Safety Classification Foundation | Taxonomy v1, a typed finding contract (status, evidence references, explanation, abstention), a replaceable classifier port, and the first real classifier: flagged terms in speech and subtitles (rule based). Labelled evaluation fixtures, API and UI. Sexual content, violence, graphic injury and drug-related content are NOT supported: no feasible local classifier exists yet (documented blocker) | DONE (flagged terms only) |
 | 8 | Playback Safety Actions | Plays the user's own file in the browser and applies user-chosen mute or skip to supported findings (flagged terms), with per-finding overrides, a master switch, deterministic interval handling and an explanation of each action. No server change, no editing of the media. Only findings that exist today (flagged terms in speech and subtitles) can trigger an action | DONE (flagged terms only) |
-| 9 | Custom Word/Phrase Detection | Builds on the Checkpoint 4 foundation (models, matching, UI exist): server-side/persistent filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
-| 10 | Visual Content Detection | Needs a genuine local visual or multimodal classifier for violence, graphic injury, drugs and sexual content (blocked in Checkpoint 7: see `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.2), with a labelled evaluation set | PLANNED |
-| 11 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
-| 12 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
-| 13 | Pre-Playback Warning | Summary and warnings before watching | PLANNED |
-| 14 | Filtering Engine | Beep, subtitle censoring, blur, rendered (edited) output and actions for further categories (mute and skip of flagged terms during playback exist since Checkpoint 8) | PLANNED |
-| 15 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
-| 16 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PLANNED |
-| 17 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
+| 9 | Complete Product Experience | Pre-emptive warning shortly before a supported finding (reusing the Checkpoint 8 Skip/Ignore actions), a saved custom-phrase workflow (add, edit, remove, saved/active state), validated local preferences, local-only missed-finding feedback, honest onboarding and analysis status, accessibility and layout polish. No new detection and no new category | DONE (flagged terms only) |
+| 10 | Custom Word/Phrase Detection (remaining) | Builds on Checkpoints 4 and 9 (matching, local list workflow exist): server-side/shared filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
+| 11 | Visual Content Detection | Needs a genuine local visual or multimodal classifier for violence, graphic injury, drugs and sexual content (blocked in Checkpoint 7: see `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.2), with a labelled evaluation set | PLANNED |
+| 12 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
+| 13 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
+| 14 | Pre-Playback Warning | Summary and report before watching (the timed in-playback warning exists since Checkpoint 9) | PLANNED |
+| 15 | Filtering Engine | Beep, subtitle censoring, blur, rendered (edited) output and actions for further categories (mute and skip of flagged terms during playback exist since Checkpoint 8) | PLANNED |
+| 16 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
+| 17 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PLANNED |
+| 18 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
 
 ## How the foundation supports this
 
 - **Domain layer** gains `Media`, `AnalysisJob`, `Transcript`, `Detection`, `Policy` types as they become real (Checkpoints 1–6, 9).
 - **Application layer** gains use cases behind ports; `MetadataReader` is the first (browser adapter today, server adapter in Checkpoint 1).
 - **Infrastructure layer** gains the API client, FFmpeg/queue/AI-provider adapters.
-- The backend (Node API + FFmpeg/FFprobe) was introduced in Checkpoint 2 as decided in `SAFEWATCH_MEDIA_ARCHITECTURE.md`. Audio/subtitle extraction moves to the next checkpoint so that Checkpoint 2 stayed a verified foundation. Later checkpoints are renumbered by one; Checkpoint 3 (extraction) was inserted before the first AI checkpoint, so everything after it moved by one again.
+- The backend (Node API + FFmpeg/FFprobe) was introduced in Checkpoint 2 as decided in `SAFEWATCH_MEDIA_ARCHITECTURE.md`. Audio/subtitle extraction moves to the next checkpoint so that Checkpoint 2 stayed a verified foundation. Later checkpoints are renumbered by one; Checkpoint 9 (complete product experience) was inserted after playback actions and shifted the rest again; Checkpoint 3 (extraction) was inserted before the first AI checkpoint, so everything after it moved by one again.
 
 ## Known gaps to decide in later checkpoints
 

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { createCustomFilter, parseStoredFilters, type CustomFilter, type FilterResult, type MatchMode } from '@/domain/text/customFilter';
+import { createCustomFilter, parseStoredFilters, updateCustomFilter, type CustomFilter, type FilterResult, type MatchMode } from '@/domain/text/customFilter';
 
 /**
  * Custom filters live in THIS browser (localStorage) and are a per-viewer
@@ -44,6 +44,11 @@ export const filtersStore = {
     if (result.ok) save([...snapshot(), result.filter]);
     return result;
   },
+  update(id: string, phrase: string, mode: MatchMode): FilterResult {
+    const result = updateCustomFilter(snapshot(), id, phrase, mode);
+    if (result.ok) save(snapshot().map((f) => (f.id === id ? result.filter : f)));
+    return result;
+  },
   toggle(id: string) { save(snapshot().map((f) => (f.id === id ? { ...f, enabled: !f.enabled } : f))); },
   remove(id: string) { save(snapshot().filter((f) => f.id !== id)); },
   /** Test helper: forget the in-memory copy so the next read goes to storage. */
@@ -53,3 +58,9 @@ export const filtersStore = {
 export function useCustomFilters(): CustomFilter[] {
   return useSyncExternalStore(filtersStore.subscribe, filtersStore.getSnapshot, filtersStore.getSnapshot);
 }
+
+/**
+ * The terms the server is asked about: ENABLED filters only, phrase and mode only. The same text is the key that says which list
+ * an analysis was made with (see appliedStore), so the interface can tell whether the current list has been applied.
+ */
+export const termsKey = (filters: readonly CustomFilter[]): string => JSON.stringify(filters.filter((f) => f.enabled).map((f) => ({ phrase: f.phrase, matchMode: f.matchMode })));

@@ -627,3 +627,35 @@ No endpoint was added or changed, no filesystem access is possible from playback
 ### 30.8 Limitations
 
 Not sample accurate (see 30.2 and the 20 to 40 ms observed start); muting is the player's own flag, so the file is never edited and there is no beep or audio replacement; the interval of a word-timed finding includes a margin and may cut neighbouring words; subtitle-cue findings mute or skip the whole line; the playhead is polled, so a very short interval can be missed by a stalled player; skipping to the exact end depends on the player's seek accuracy (keyframes) and is retried; formats the browser cannot decode cannot be played; the file must stay in the page; only flagged terms are supported.
+
+## 31. Product experience (Checkpoint 9)
+
+Adds no detection, category or server behaviour. It makes the existing flagged-term findings usable: a timed warning, a saved phrase workflow, validated preferences, local feedback and honest status text.
+
+### 31.1 Warning scheduler
+
+`src/domain/warnings` is pure: `buildWarningGroups` turns resolved CP8 views into groups (overlapping and adjacent findings merge; unavailable, ignored and invalid findings are excluded) and `WarningScheduler` decides from the playhead, an injected monotonic clock and a `WarningSurface`. A group's warning window is `[start - lead, start)`. Rules:
+
+- one warning at a time; later groups queue in start order and a `WARNING_GAP_MS` (500 ms) pause separates consecutive warnings; no group warns twice per pass (re-armed only when the playhead leaves its window, so replay and backward seeks work);
+- Skip/Ignore resolve the whole group through the CP8 override path once; expiry, dismissal and disabling never change media or settings;
+- a seek or start inside a window warns at once, marked late, with the real time left; a finding that has already begun is never warned about; seeking forward past a finding removes its warning; seeking back out of a window re-arms it; a paused playhead gives no new warning, and a visible warning keeps expiring on real time (it is not frozen by pause); hover and focus hold the countdown and resume with the remaining time; the warning also disappears when its finding begins; end, replay (warns again), media replacement and unmount are handled (`dispose` hides and ignores later signals);
+- the confidence is never invented: uncertain findings are labelled uncertain, nothing else is shown;
+- the live-region announcement is made once per warning.
+
+`usePlaybackCoordinator` owns both the coordinator and the scheduler with one set of media listeners and one boundary timer (animation frames are throttled in practice, see §30.4). Errors in the scheduler disable only warnings; the CP8 coordinator keeps working, and the reverse.
+
+### 31.2 Stores
+
+`createLocalStore` (`src/lib/localStore.ts`): validated parse on read, in-memory fallback when storage is unavailable or full, `useSyncExternalStore` subscription, never throws. Keys: preferences, feedback reports, filter list. Parsers read own properties only, clamp to allowed options and drop invalid records. No absolute paths, media ids or file names are stored.
+
+### 31.3 Custom phrases
+
+`updateCustomFilter` adds an edit operation with a `not-found` rejection beside the existing add/remove/validation/duplicate rules. `appliedStore` (memory) records which term set the current analysis used; the UI compares it to `termsKey` of the saved enabled terms to show saved / active / not applied. Phrases are sent to the local server only when an analysis is requested and are not logged or persisted there.
+
+### 31.4 Feedback
+
+`src/domain/feedback/report.ts` validates timestamp (`m:ss`, `h:mm:ss` or seconds), phrase (≤ 200), category (`heard`, `subtitle`, `unsure`: what the product can represent), optional note (≤ 200), at most 200 reports. Reports are local only: no endpoint, no logging, never turned into findings and never used to change detection.
+
+### 31.5 Limits
+
+Warnings are as accurate as the CP8 intervals (not sample accurate); timers are scheduled at the real boundary but rendering depends on the browser; a hidden tab is re-evaluated on return; only flagged terms; no overall score; no safety verdict. **Unchanged production gates (NOT solved):** authentication / media-id access control, rate limiting, disk quotas, FFmpeg/helper sandboxing, lifecycle cleanup.

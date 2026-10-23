@@ -5,11 +5,18 @@ import { Button } from '@/components/ui/Button';
 import { actionsOf, resolveViews, INITIAL_SETTINGS, type ActionChoice, type FindingActionView } from '@/domain/playback/actions';
 import type { CoordinatorEvent } from '@/domain/playback/coordinator';
 import { planCandidates } from '@/domain/playback/planning';
+import { buildWarningGroups } from '@/domain/warnings/groups';
+import type { ActiveWarning, WarningEvent } from '@/domain/warnings/scheduler';
+import { FeedbackPanel } from '@/features/feedback/FeedbackPanel';
+import { newSessionId } from '@/features/feedback/feedbackStore';
+import { preferencesStore, usePreferences } from '@/features/preferences/preferencesStore';
 import { categoryById } from '@/domain/safety/taxonomy';
 import type { SafetyLoad } from '@/features/upload/SafetyPanel';
 import { cn } from '@/lib/cn';
 import { settingsReducer } from './actionSettings';
 import { analysisNote, eventText, range, TIMING_LABEL, unavailableText } from './playbackCopy';
+import { PlaybackPreferences } from './PlaybackPreferences';
+import { UpcomingWarning, warningPhrases, warningTitle, warningWhen } from './UpcomingWarning';
 import { usePlaybackCoordinator } from './usePlaybackCoordinator';
 
 const CHOICES: Array<{ value: ActionChoice; label: string }> = [
@@ -33,7 +40,11 @@ interface PlaybackPanelProps {
  * not persisted and not sent anywhere.
  */
 export function PlaybackPanel({ file, mediaId, safety }: PlaybackPanelProps) {
-  const [settings, dispatch] = useReducer(settingsReducer, INITIAL_SETTINGS);
+  const prefs = usePreferences();
+  // The default action is a remembered preference; everything else (master switch, per-finding choices) belongs to this video only.
+  const [settings, dispatch] = useReducer(settingsReducer, undefined, () => ({ ...INITIAL_SETTINGS, defaultChoice: preferencesStore.getSnapshot().defaultAction }));
+  const [session] = useState(newSessionId);
+  const [activeWarning, setActiveWarning] = useState<ActiveWarning | null>(null);
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const bindVideo = useCallback((el: HTMLVideoElement | null) => { videoRef.current = el; setVideo(el); }, []);
@@ -58,9 +69,26 @@ export function PlaybackPanel({ file, mediaId, safety }: PlaybackPanelProps) {
   const actions = useMemo(() => actionsOf(views), [views]);
   const termByFinding = useMemo(() => new Map(candidates.map((c) => [c.findingId, c.term])), [candidates]);
 
+  const groups = useMemo(() => buildWarningGroups(views), [views]);
+  const warningSettings = useMemo(() => ({ enabled: prefs.warningsEnabled && !failed, leadMs: prefs.leadSeconds * 1000, durationMs: prefs.durationSeconds * 1000 }), [prefs.warningsEnabled, prefs.leadSeconds, prefs.durationSeconds, failed]);
+  const onWarning = useCallback((e: WarningEvent) => {
+    if (e.type === 'show') { setActiveWarning(e.warning); setAnnouncement(`${warningTitle(e.warning)} ${warningPhrases(e.warning)} ${warningWhen(e.warning)}`.replace(/\s+/g, ' ')); } else setActiveWarning((cur) => (cur?.id === e.id ? null : cur));
+  }, []);
+  useEffect(() => { setActiveWarning(null); }, [url]); // eslint-disable-line react-hooks/set-state-in-effect -- a different video never inherits a warning
+
   const onEvent = useCallback((e: CoordinatorEvent) => { setAnnouncement(eventText(e, (id) => termByFinding.get(id) ?? null)); }, [termByFinding]);
   const onFailure = useCallback(() => { setFailed(true); setAnnouncement('Automatic actions stopped because of an error. Playback and your sound are not affected.'); }, []);
-  usePlaybackCoordinator({ video, sourceKey: url ?? '', actions, autoEnabled: settings.autoEnabled && !failed, onEvent, onFailure });
+  const warning = useMemo(() => ({ groups, settings: warningSettings, onEvent: onWarning }), [groups, warningSettings, onWarning]);
+  const controls = usePlaybackCoordinator({ video, sourceKey: url ?? '', actions, autoEnabled: settings.autoEnabled && !failed, onEvent, onFailure, warning });
+
+  /** Skip and Ignore on a warning are the CP8 choices for the findings it covers, applied once; the warning then goes away. */
+  const applyFromWarning = (w: ActiveWarning, choice: 'skip' | 'ignore') => {
+    for (const m of w.group.members) dispatch({ type: 'choose', key: m.overrideKey, choice });
+    controls.resolve();
+    setAnnouncement(choice === 'skip' ? `Set to skip ${warningPhrases(w)}. It will be skipped when playback reaches it.` : `Ignored ${warningPhrases(w)}. You can undo this in the list below.`);
+  };
+  const chooseDefault = (choice: 'none' | 'mute' | 'skip') => { preferencesStore.update({ defaultAction: choice }); dispatch({ type: 'default', choice }); };
+  const slot = warningSettings.enabled && settings.autoEnabled && groups.length > 0;
 
   const note = analysisNote(safety, candidates);
   const jump = (v: FindingActionView) => { const el = videoRef.current; if (el) el.currentTime = Math.max(0, v.candidate.startMs - 1500) / 1000; };
@@ -79,6 +107,20 @@ export function PlaybackPanel({ file, mediaId, safety }: PlaybackPanelProps) {
           onError={() => setPlayError(true)}
         />
       )}
+      {slot && (
+        // A fixed-height place under the player: a warning appears here instead of over the picture, the captions or the controls, and the layout never jumps.
+        <div className="sw-warnslot">
+          {activeWarning ? (
+            <UpcomingWarning
+              warning={activeWarning} durationMs={warningSettings.durationMs}
+              onSkip={() => applyFromWarning(activeWarning, 'skip')} onIgnore={() => applyFromWarning(activeWarning, 'ignore')}
+              onDismiss={() => controls.dismiss()} onHold={controls.hold} onRelease={controls.release}
+            />
+          ) : (
+            <p className="sw-caption sw-muted sw-warnslot__hint">A heads-up appears here {prefs.leadSeconds} seconds before a flagged phrase.</p>
+          )}
+        </div>
+      )}
       {playError && <Alert tone="warning" title="This browser could not play this file">The format may not be supported here. Findings and actions are listed below, but nothing can be played or acted on.</Alert>}
 
       <div className="sw-pcontrols">
@@ -88,7 +130,7 @@ export function PlaybackPanel({ file, mediaId, safety }: PlaybackPanelProps) {
         </label>
         <label className="sw-pselect">
           <span className="sw-caption sw-muted">Default for flagged terms</span>
-          <select className="sw-select" value={settings.defaultChoice} onChange={(e) => dispatch({ type: 'default', choice: e.target.value as 'none' | 'mute' | 'skip' })}>
+          <select className="sw-select" value={settings.defaultChoice} onChange={(e) => chooseDefault(e.target.value as 'none' | 'mute' | 'skip')}>
             <option value="none">No action</option><option value="mute">Mute</option><option value="skip">Skip</option>
           </select>
         </label>
@@ -106,8 +148,19 @@ export function PlaybackPanel({ file, mediaId, safety }: PlaybackPanelProps) {
         </ul>
       )}
 
+      {candidates.length > 0 && (
+        <details className="sw-details">
+          <summary className="sw-caption">Why can a finding be unavailable for actions?</summary>
+          <div className="sw-details__body">
+            <p className="sw-caption sw-muted">A finding gets no automatic action when its timing cannot be trusted: it has no duration (a word without an end time), it lies outside the video, its details are not valid, or its category is not supported. It is still listed, and the absence of an action does not mean it is unimportant.</p>
+          </div>
+        </details>
+      )}
+      <PlaybackPreferences />
+      <FeedbackPanel session={session} durationMs={durationMs} playheadMs={() => (videoRef.current ? Math.round(videoRef.current.currentTime * 1000) : null)} />
+
       <p className="sw-caption sw-muted">
-        Actions use the player’s own mute and seek on your file in this browser; the file is not edited or uploaded again. Timing is not sample accurate: each finding says how precise its times are. Only flagged terms in speech and subtitles are supported; nothing else is detected, and unsupported categories never trigger an action. Your choices are kept for this video only and are not saved.
+        Actions use the player’s own mute and seek on your file in this browser; the file is not edited or uploaded again. Timing is not sample accurate: each finding says how precise its times are. Only flagged terms in speech and subtitles are supported; nothing else is detected, and unsupported categories never trigger an action. Your choices for each finding are kept for this video only and are not saved; the default action and the warning settings are remembered in this browser.
       </p>
     </section>
   );

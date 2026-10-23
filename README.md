@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 9 — complete product experience.** The playback panel now warns you shortly before a supported finding (default 20 s ahead, shown for 3 s), with **Skip** and **Ignore** buttons that reuse the Checkpoint 8 actions; ignoring the warning does nothing. Your flagged-term list can be added to, edited and removed with a clear saved / active / not-yet-applied state, and playback preferences (warnings on or off, lead time, visible time, default action) are saved in this browser after validation. You can report a missed finding (stored only in this browser, never sent, never used to train anything) and the page explains plainly what was analyzed and why a finding may be unavailable. **Still only flagged terms in speech and subtitles are detected.** No sexual, violence, graphic or drug detection exists, there is no safety score, and a result without findings does not mean a video is safe. See `CHECKPOINT_9_REPORT.md`.
+
 **Checkpoint 8 — playback safety actions.** The uploaded video can now be played in the page (the browser's own player on your own file, no server involved) and the findings of Checkpoint 7 can drive **mute** and **skip** while you watch. Nothing happens until you choose (the default is no action), only findings that exist today (flagged terms in speech and subtitles) can trigger an action, uncertain findings are never acted on unless you choose it, and a master switch and per-finding choices (mute, skip, ignore, none) take effect immediately. The media is not edited, timing is not sample accurate, and no visual or other category is detected. See `CHECKPOINT_8_REPORT.md`.
 
 **Checkpoint 7 — safety classification foundation.** SafeWatch now has a safety taxonomy, a typed finding contract (with evidence references, explicit uncertainty and abstention) and a replaceable classifier port. **One category is genuinely implemented: flagged terms** (words and phrases you list, found in speech and subtitles by a rule-based matcher). **Sexual content, violence, graphic injury and drug-related content are NOT supported**: no feasible local classifier exists (see below), and object labels or people in a frame are never treated as evidence of them. There is **no overall safety score and no verdict**, and nothing is muted, censored, blurred, skipped or warned about. See `CHECKPOINT_7_REPORT.md`.
@@ -229,6 +231,15 @@ the video's duration ───────────►                       
 - **Privacy:** choices live in memory for the open video only: nothing is saved or sent. **Not implemented:** actions for any other category, beep, blur, subtitle censoring, edited output, warnings.
 - Measure it: `npm run check:playback`. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §30.
 
+## Product experience (Checkpoint 9)
+
+- **Warnings:** a pure `WarningScheduler` (`src/domain/warnings`) shows one warning per group of overlapping findings, `leadSeconds` (10, 20 or 30; default 20) before the first one, for `durationSeconds` (3, 5 or 8; default 3). Skip and Ignore call the same CP8 override path once; expiry or dismissal does nothing to the media. Pause, seek, replay, media replacement and end are handled; the countdown holds while the warning is hovered or focused. One playback hook feeds both the CP8 coordinator and the scheduler, so there is still a single playback engine.
+- **Custom phrases:** add, edit, remove, enable. The list is saved in this browser; when you analyze a video the enabled phrases are sent to your own SafeWatch server for matching (not stored or logged there). Changing the list shows "not applied" until you re-run the analysis. Matching is exact on normalised text; nothing is learned.
+- **Preferences:** `src/domain/preferences` + a validated `localStorage` store with an in-memory fallback. There is no "censor everything" mode.
+- **Feedback:** a missed-finding report (timestamp prefilled from the playhead, phrase, what it was, optional note) stored only in this browser; it never becomes a finding and does not train or guarantee anything. Review and delete in the panel.
+- **Honesty:** supported media, evidence availability and "no findings is not a safety verdict" are stated on the page.
+- Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §31.
+
 ## Technology stack
 
 - **Vite + React 19 + TypeScript (strict)** — SPA with fast tooling.
@@ -271,7 +282,7 @@ npm run dev
 
 ## Roadmap
 
-See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 11).
+See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 18).
 
 ## Development workflow
 

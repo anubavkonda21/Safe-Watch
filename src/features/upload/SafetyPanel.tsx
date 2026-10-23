@@ -7,7 +7,8 @@ import type { MediaAsset } from '@/domain/media/asset';
 import { formatTimecode } from '@/domain/media/format';
 import { categoryById } from '@/domain/safety/taxonomy';
 import type { SafetyAnalysis, SafetyFinding } from '@/domain/safety/finding';
-import { useCustomFilters } from '@/features/filters/filtersStore';
+import { appliedStore } from '@/features/filters/appliedStore';
+import { termsKey, useCustomFilters } from '@/features/filters/filtersStore';
 import { cn } from '@/lib/cn';
 import { abstainText, analysisWarningText, categoryStatusText, warningText } from './safetyCopy';
 
@@ -35,23 +36,25 @@ interface SafetyPanelProps {
  */
 export function SafetyPanel({ ingestion, asset, evidenceReady, onLoad }: SafetyPanelProps) {
   const filters = useCustomFilters();
-  const terms = filters.filter((f) => f.enabled).map((f) => ({ phrase: f.phrase, matchMode: f.matchMode }));
-  const key = JSON.stringify(terms);
+  const key = termsKey(filters);
   const [load, setLoad] = useState<Load>({ state: 'loading' });
 
   useEffect(() => {
     if (!evidenceReady) return;
     const controller = new AbortController();
+    appliedStore.pending();
     const timer = setTimeout(() => {
-      ingestion.loadSafetyFindings(asset, JSON.parse(key) as typeof terms, { signal: controller.signal })
-        .then((analysis) => { if (!controller.signal.aborted) setLoad(analysis ? { state: 'ready', analysis } : { state: 'unavailable' }); })
-        .catch(() => { if (!controller.signal.aborted) setLoad({ state: 'unavailable' }); });
+      ingestion.loadSafetyFindings(asset, JSON.parse(key) as Array<{ phrase: string; matchMode: string }>, { signal: controller.signal })
+        .then((analysis) => { if (controller.signal.aborted) return; setLoad(analysis ? { state: 'ready', analysis } : { state: 'unavailable' }); if (analysis) appliedStore.applied(key); else appliedStore.failed(); })
+        .catch(() => { if (controller.signal.aborted) return; setLoad({ state: 'unavailable' }); appliedStore.failed(); });
     }, 200);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [ingestion, asset, evidenceReady, key]);
 
   const shown: SafetyLoad = evidenceReady ? load : { state: 'loading' };
   useEffect(() => { onLoad?.(shown); }, [onLoad, shown.state, shown.state === 'ready' ? shown.analysis : null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => appliedStore.reset(), []);
 
   if (!evidenceReady || load.state === 'loading') {
     return (

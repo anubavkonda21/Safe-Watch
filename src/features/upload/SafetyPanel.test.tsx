@@ -5,11 +5,12 @@ import { createMediaIngestion, type MediaIngestion } from '@/application/mediaIn
 import type { MediaUploader } from '@/application/mediaUploader';
 import { PENDING_METADATA, type MediaAsset } from '@/domain/media/asset';
 import type { SafetyAnalysis } from '@/domain/safety/finding';
-import { filtersStore } from '@/features/filters/filtersStore';
+import { appliedStore } from '@/features/filters/appliedStore';
+import { filtersStore, termsKey } from '@/features/filters/filtersStore';
 import { safetyFor } from '@/test/safetyAnalysis';
 import { SafetyPanel } from './SafetyPanel';
 
-beforeEach(() => { window.localStorage.clear(); filtersStore.reload(); });
+beforeEach(() => { window.localStorage.clear(); filtersStore.reload(); appliedStore.reset(); });
 
 const asset: MediaAsset = { id: 'm', filename: 'a.mp4', mimeType: 'video/mp4', container: 'mp4', typeLabel: 'MP4 video', sizeBytes: 5, status: 'ready', metadata: PENDING_METADATA, createdAt: 'x', failure: null };
 const ingestionWith = (load: MediaUploader['loadSafetyFindings']): MediaIngestion =>
@@ -169,5 +170,25 @@ describe('SafetyPanel vocabulary', () => {
     expect(own).not.toMatch(/\b(unsafe|dangerous|verdict|risk|score|rating|passed|failed)\b/i);
     expect(own).not.toMatch(/\b(video|media|content) (is|are) (safe|clean|fine)\b/i);
     expect(panel().textContent).not.toMatch(/\d+\s*\/\s*100|\d+%\s*(safe|unsafe)/i);
+  });
+});
+
+describe('SafetyPanel reports which phrase list was applied', () => {
+  it('pending while asking, then applied with the exact list it asked about; unmounting forgets it', async () => {
+    filtersStore.add('safe watch', 'phrase');
+    let finish!: () => void;
+    const { unmount } = render1(() => new Promise<SafetyAnalysis>((resolve) => { finish = () => resolve(void 0 as never); }));
+    await waitFor(() => expect(appliedStore.getSnapshot()).toEqual({ status: 'pending' }));
+    unmount();
+    expect(appliedStore.getSnapshot()).toEqual({ status: 'idle' });
+    void finish;
+  });
+  it('applied carries the list key; a failed request is reported as failed', async () => {
+    filtersStore.add('safe watch', 'phrase');
+    const ok = render1(async () => safetyFor('m', [['safe watch', 'phrase']]));
+    await waitFor(() => expect(appliedStore.getSnapshot()).toEqual({ status: 'applied', key: termsKey(filtersStore.getSnapshot()) }));
+    ok.unmount();
+    render1(async () => { throw new Error('x'); });
+    await waitFor(() => expect(appliedStore.getSnapshot()).toEqual({ status: 'failed' }));
   });
 });

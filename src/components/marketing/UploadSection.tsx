@@ -1,4 +1,5 @@
 import { Container } from '@/components/ui/Container';
+import { ProductGuide } from '@/features/upload/ProductGuide';
 import { UploadDropzone } from '@/features/upload/UploadDropzone';
 
 export function UploadSection() {
@@ -10,6 +11,7 @@ export function UploadSection() {
           <p className="sw-body-lg sw-muted">The first step of the analysis workflow.</p>
         </div>
         <UploadDropzone />
+        <ProductGuide />
       </Container>
     </section>
   );

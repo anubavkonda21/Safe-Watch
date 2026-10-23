@@ -36,7 +36,7 @@ export interface CustomFilter {
 export const MAX_PHRASE_LENGTH = 200;
 export const MAX_FILTERS = 100;
 
-export type FilterRejection = 'empty' | 'too-long' | 'no-words' | 'duplicate' | 'limit-reached';
+export type FilterRejection = 'empty' | 'too-long' | 'no-words' | 'duplicate' | 'limit-reached' | 'not-found';
 
 export type FilterResult = { ok: true; filter: CustomFilter } | { ok: false; reason: FilterRejection };
 
@@ -54,6 +54,17 @@ export function createCustomFilter(
   if (tokenize(normalizedPhrase).length === 0) return { ok: false, reason: 'no-words' };
   if (existing.some((f) => f.normalizedPhrase === normalizedPhrase && f.matchMode === matchMode)) return { ok: false, reason: 'duplicate' };
   return { ok: true, filter: { id: env.id, phrase, normalizedPhrase, matchMode, enabled: true, createdAt: env.now } };
+}
+
+/**
+ * Changes the phrase and mode of an existing filter, with exactly the rules of `createCustomFilter` (normalisation, length,
+ * duplicates). The filter keeps its id, its enabled flag and its creation time; a duplicate is checked against the OTHER filters.
+ */
+export function updateCustomFilter(existing: readonly CustomFilter[], id: string, rawPhrase: string, matchMode: MatchMode): FilterResult {
+  const current = existing.find((f) => f.id === id);
+  if (!current) return { ok: false, reason: 'not-found' };
+  const result = createCustomFilter(rawPhrase, matchMode, existing.filter((f) => f.id !== id), { id, now: current.createdAt });
+  return result.ok ? { ok: true, filter: { ...result.filter, enabled: current.enabled } } : result;
 }
 
 /** Defensive check for filters read back from storage: anything malformed is discarded, never trusted. */

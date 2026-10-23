@@ -1,11 +1,12 @@
-import { render, screen, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach } from 'vitest';
 import { CustomFiltersSection } from './CustomFilters';
-import { filtersStore } from './filtersStore';
+import { appliedStore } from './appliedStore';
+import { filtersStore, termsKey } from './filtersStore';
 
 const KEY = 'safewatch.customFilters.v1';
-beforeEach(() => { window.localStorage.clear(); filtersStore.reload(); });
+beforeEach(() => { window.localStorage.clear(); filtersStore.reload(); appliedStore.reset(); });
 
 const add = async (phrase: string) => {
   const input = screen.getByLabelText('Word or phrase');
@@ -19,7 +20,7 @@ describe('Custom filters UI', () => {
     render(<CustomFiltersSection />);
     expect(screen.getByRole('heading', { name: 'Custom filters' })).toBeInTheDocument();
     expect(screen.getByText('Choose words or phrases SafeWatch should detect.')).toBeInTheDocument();
-    expect(screen.getByText(/No filters yet/)).toBeInTheDocument();
+    expect(screen.getByText(/No filters yet\. Add a word or phrase/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Your filters' })).not.toBeInTheDocument();
   });
   it('adds a filter by pressing Enter, clears the field and lists it', async () => {
@@ -126,8 +127,116 @@ describe('Custom filters UI', () => {
     expect(document.querySelector('img[src="x"]')).toBeNull();
     expect(document.querySelector('script')).toBeNull();
   });
-  it('says plainly that it only detects', () => {
+  it('says accurately what it does: finds the words in speech and subtitles, can warn, mute or skip on request, learns nothing', () => {
     render(<CustomFiltersSection />);
-    expect(screen.getByText(/does not mute, hide or change your video/)).toBeInTheDocument();
+    expect(screen.getByText(/finds where your words and phrases occur in a video’s speech and subtitles/)).toBeInTheDocument();
+    expect(screen.getByText(/does not learn new ideas from your list and does not understand what a sentence means/)).toBeInTheDocument();
+  });
+  it('states honestly where the list goes: saved in this browser, enabled phrases sent to the SafeWatch server, nothing to anyone else', () => {
+    render(<CustomFiltersSection />);
+    const note = screen.getByText(/Your list is saved in this browser/);
+    expect(note).toHaveTextContent('the enabled phrases are sent to your SafeWatch server');
+    expect(note).toHaveTextContent('does not store or log them, and nothing is sent to anyone else');
+    expect(document.body.textContent).not.toMatch(/never (sent|leave)|stay in this browser/i);
+  });
+
+  describe('editing', () => {
+    const edit = async (name: RegExp, phrase: string) => {
+      await userEvent.click(screen.getByRole('button', { name }));
+      const input = screen.getByLabelText('Edit phrase');
+      await userEvent.clear(input);
+      await userEvent.type(input, phrase);
+    };
+    it('edits the phrase and the match mode in place, keeping the enabled state', async () => {
+      render(<CustomFiltersSection />);
+      await add('colour');
+      await userEvent.click(screen.getByRole('switch', { name: /Detect “colour”/ }));
+      await userEvent.click(screen.getByRole('button', { name: /Edit filter “colour”/ }));
+      expect(screen.getByLabelText('Edit phrase')).toHaveFocus();
+      await userEvent.clear(screen.getByLabelText('Edit phrase'));
+      await userEvent.type(screen.getByLabelText('Edit phrase'), 'color');
+      await userEvent.selectOptions(screen.getAllByLabelText('Match')[1]!, 'exact');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      const item = within(screen.getByRole('list', { name: 'Your filters' })).getByText('color').closest('li')!;
+      expect(item).toHaveTextContent('Exact case');
+      expect(within(item).getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+      expect(screen.queryByText('colour')).not.toBeInTheDocument();
+      expect(JSON.parse(window.localStorage.getItem(KEY)!)[0]).toMatchObject({ phrase: 'color', matchMode: 'exact', enabled: false });
+    });
+    it('applies the same rules as adding: empty, punctuation-only, too long and duplicate are rejected with a message and nothing changes', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha'); await add('beta');
+      await edit(/Edit filter “beta”/, '   ');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(screen.getByText('Enter a word or phrase.')).toBeInTheDocument();
+      await userEvent.clear(screen.getByLabelText('Edit phrase')); await userEvent.type(screen.getByLabelText('Edit phrase'), '!!!');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(screen.getByText('Include at least one letter or number.')).toBeInTheDocument();
+      await userEvent.clear(screen.getByLabelText('Edit phrase')); await userEvent.type(screen.getByLabelText('Edit phrase'), 'ALPHA');
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(screen.getByText('You already have that filter.')).toBeInTheDocument();
+      expect(JSON.parse(window.localStorage.getItem(KEY)!).map((f: { phrase: string }) => f.phrase)).toEqual(['alpha', 'beta']);
+    });
+    it('saving a filter unchanged is allowed (it is not a duplicate of itself)', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha');
+      await userEvent.click(screen.getByRole('button', { name: /Edit filter “alpha”/ }));
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(screen.queryByText('You already have that filter.')).not.toBeInTheDocument();
+      expect(screen.getByRole('list', { name: 'Your filters' })).toHaveTextContent('alpha');
+    });
+    it('Cancel and Escape leave the filter as it was', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha');
+      await edit(/Edit filter “alpha”/, 'changed');
+      await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.getByText('alpha')).toBeInTheDocument();
+      await edit(/Edit filter “alpha”/, 'changed again');
+      await userEvent.keyboard('{Escape}');
+      expect(screen.getByText('alpha')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Edit phrase')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('saved, active and not yet applied', () => {
+    const status = () => screen.queryByTestId('filters-status');
+    it('says nothing about the list while it is empty, then that it is saved here and used when a video is analyzed', async () => {
+      render(<CustomFiltersSection />);
+      expect(status()).not.toBeInTheDocument();
+      await add('alpha');
+      expect(status()).toHaveTextContent('Saved in this browser. They are used when you analyze a video.');
+    });
+    it('shows that the open video’s findings are being updated, are active, or could not be updated', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha');
+      act(() => appliedStore.pending());
+      expect(status()).toHaveTextContent('Updating the open video’s findings…');
+      act(() => appliedStore.applied(termsKey(filtersStore.getSnapshot())));
+      expect(status()).toHaveTextContent('Saved and active: this list is used in the open video’s findings.');
+      expect(status()).toHaveTextContent('the speech and subtitles are not processed again');
+      act(() => appliedStore.failed());
+      expect(status()).toHaveTextContent('could not be updated: they still show the earlier list');
+    });
+    it('notices when the list changed after the analysis: not yet applied, then active again once it is', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha');
+      act(() => appliedStore.applied(termsKey(filtersStore.getSnapshot())));
+      await add('beta');
+      expect(status()).toHaveTextContent('findings use an earlier list and update in a moment');
+      act(() => appliedStore.applied(termsKey(filtersStore.getSnapshot())));
+      expect(status()).toHaveTextContent('Saved and active');
+    });
+    it('disabling a phrase changes the applied list too (only enabled phrases count)', async () => {
+      render(<CustomFiltersSection />);
+      await add('alpha');
+      act(() => appliedStore.applied(termsKey(filtersStore.getSnapshot())));
+      await userEvent.click(screen.getByRole('switch', { name: /Detect “alpha”/ }));
+      expect(status()).toHaveTextContent('earlier list');
+    });
+    it('never says the model learns, and never says phrases stay on the device', () => {
+      render(<CustomFiltersSection />);
+      expect(document.body.textContent).not.toMatch(/will learn|teaches the model|stay on this device|never leave|never sent/i);
+      expect(document.body.textContent).toContain('does not learn new ideas from your list');
+    });
   });
 });

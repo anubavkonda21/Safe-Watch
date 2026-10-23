@@ -23,6 +23,7 @@ import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
 import { TextBadge, TranscriptPanel } from './TranscriptPanel';
 import { VisualBadge, VisualPanel } from './VisualPanel';
 import { ContextBadge, ContextPanel } from './ContextPanel';
+import { EvidenceAvailability } from './EvidenceAvailability';
 import { SafetyPanel, type SafetyLoad } from './SafetyPanel';
 import { PlaybackPanel } from '@/features/playback/PlaybackPanel';
 import { useMediaIngestion } from './useMediaIngestion';
@@ -222,6 +223,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
           <Badge tone="neutral">Analysis: {ANALYSIS_LABEL[analysis ?? 'not_started'].toLowerCase()}</Badge>
         </div>
       )}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <EvidenceAvailability context={context} />}
       {ready && m.availability === 'unavailable' && (
         <div className="sw-upload__alert">
           <Alert tone="info" title="Video details are not available in this browser">
