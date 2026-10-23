@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 8 — playback safety actions.** The uploaded video can now be played in the page (the browser's own player on your own file, no server involved) and the findings of Checkpoint 7 can drive **mute** and **skip** while you watch. Nothing happens until you choose (the default is no action), only findings that exist today (flagged terms in speech and subtitles) can trigger an action, uncertain findings are never acted on unless you choose it, and a master switch and per-finding choices (mute, skip, ignore, none) take effect immediately. The media is not edited, timing is not sample accurate, and no visual or other category is detected. See `CHECKPOINT_8_REPORT.md`.
+
 **Checkpoint 7 — safety classification foundation.** SafeWatch now has a safety taxonomy, a typed finding contract (with evidence references, explicit uncertainty and abstention) and a replaceable classifier port. **One category is genuinely implemented: flagged terms** (words and phrases you list, found in speech and subtitles by a rule-based matcher). **Sexual content, violence, graphic injury and drug-related content are NOT supported**: no feasible local classifier exists (see below), and object labels or people in a frame are never treated as evidence of them. There is **no overall safety score and no verdict**, and nothing is muted, censored, blurred, skipped or warned about. See `CHECKPOINT_7_REPORT.md`.
 
 **Checkpoint 6 — cross-modal context and temporal reasoning foundation.** Speech, subtitle and visual evidence from the earlier steps is now correlated on the media timeline into **context events**: groups of evidence that belong together in time, each keeping every piece of evidence with its own provenance and confidence, and an explanation of why it was grouped. It is deterministic and local (no model, no LLM). **It does not classify safety: no safety score, no verdict, and nothing is muted, censored, blurred or skipped.** See `CHECKPOINT_6_REPORT.md`.
@@ -39,6 +41,7 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Safety taxonomy, finding contract, classifier port | IMPLEMENTED |
 | Flagged-term classifier (speech and subtitles; rule based) with evaluation fixtures | IMPLEMENTED — occurrence of listed words only, not meaning |
 | Sexual content, violence, graphic injury, drug-related content classification | NOT SUPPORTED — no feasible local classifier (documented blocker) |
+| Playback of the user's own file with mute and skip of flagged-term findings, overrides and explanations | IMPLEMENTED — browser mute and seek on the user's file, not sample accurate |
 | Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
@@ -209,6 +212,22 @@ ContextAnalysis (CP6) ───────┘     (SafetyClassifier port)      
 - **Abstention:** no listed terms, or both text inputs unavailable, gives `abstained` (no negative claim). A missing input gives `partial` and names it. A classifier that throws is `abstained` with a fixed reason.
 - **API:** `POST /api/media/:id/safety-findings` with `{ "terms": [{ "phrase", "matchMode" }] }` (strict body, at most 100 terms and 32 KB); `GET` is the same with no terms. Computed from the earlier stages' results: nothing is re-extracted, no file is read.
 - **Evaluate it:** `npm run eval:safety` (43 labelled synthetic examples, including 6 known limitations), `npm run check:safety` (runtime). The fixtures are engineering fixtures, not a benchmark. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.
+
+## Playback safety actions (Checkpoint 8)
+
+```
+SafetyAnalysis (CP7 findings) ─► planCandidates ─► ActionCandidate[]  ─┐  (interval, timing quality, availability)
+your choices (in memory) ───────► resolveViews  ─► PlaybackAction[]   ─┼─► buildSpans ─► PlaybackCoordinator ─► <video> mute / seek
+the video's duration ───────────►                                      ─┘     (pure domain)     (PlaybackSurface)
+```
+
+- **Media source:** the browser plays the `File` you chose through an object URL. The server never serves the original media, so no endpoint, path or upload was added. Whether a file plays depends on your browser's codec and container support; if it cannot play, the panel says so.
+- **Actions:** `mute` (the player's `muted` flag only while the playhead is inside the interval; your volume is never touched and your own mute state is restored), `skip` (seek to the interval's end, once, never beyond the duration), `ignore` (undoable), `none` (default).
+- **Intervals:** integer milliseconds, half-open. Word-timed speech gets a margin (150 ms before, 250 ms after) because its start is aligned (about 0.1 s) and its end is approximate; a subtitle cue is exact but covers the whole line; speech without word timing is the whole segment. Zero-length, out-of-range or invalid findings are listed as unavailable with the reason and are never acted on. Overlapping and adjacent actions merge into one span, keeping every source finding.
+- **No traps:** a skip moves strictly forward, waits for its own seek, retries at most 3 times, and a seek the user makes into a skip interval is respected until they leave it; replay skips again.
+- **Failure isolation:** an error in the action code restores your sound, stops automatic actions and leaves the player alone.
+- **Privacy:** choices live in memory for the open video only: nothing is saved or sent. **Not implemented:** actions for any other category, beep, blur, subtitle censoring, edited output, warnings.
+- Measure it: `npm run check:playback`. Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §30.
 
 ## Technology stack
 

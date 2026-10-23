@@ -568,3 +568,62 @@ Result: 43 examples, 37 behave as labelled, 6 known limitations, 0 unexpected fa
 ### 29.7 Performance
 
 `npm run check:safety` (synthetic evidence, one sentence and its cue every 6 s, 12 timed words each): 1 min (20 text events) 0.1 ms with 3 terms, 1.6 ms with 100 terms; 30 min (600 events) 1.9 ms and 77 ms; 3 h (3 600 events) 13 ms and 78 ms. Memory stays near 10 to 130 MB heap. The 100-term runs use common words and hit the 10 000 match cap, which is why the 3 h run is no slower than 30 min. Response size grows with findings (3.4 MB for 3 500 findings), so a term list of very common words is an expensive request: bounded, not rate limited.
+
+---
+
+## 30. Playback safety actions (Checkpoint 8)
+
+The first layer that acts on findings: while the user watches their own file, supported findings can mute or skip. It adds no detection, no category and no server behaviour. It acts only on `flagged-terms` findings (the only implemented category) and never on an invented one.
+
+```
+ SafetyAnalysis ──► planCandidates ──► ActionCandidate[] ──► resolveViews(settings) ──► PlaybackAction[] ──► buildSpans ──► PlaybackCoordinator
+ (CP7, unchanged)    availability,        user choices           mute | skip              merged, sorted          │ decides from position + signals
+                     timing quality,      (in memory)                                                           ▼
+                     margin, clamp                                              PlaybackSurface  ◄── VideoSurface(HTMLVideoElement): seconds ↔ integer ms
+                                                                                                    (the only place units change)
+```
+
+Everything left of `VideoSurface` is pure domain (`src/domain/playback`), tested with a fake player and no real time. The classifier is untouched, findings are never mutated, and no second taxonomy or finding model exists.
+
+### 30.1 Media source (discovered, not assumed)
+
+The application had no player and no endpoint serving the original media (the server stores the upload but exposes only metadata, extraction, evidence and frame images). The smallest safe integration is **the browser playing the user's own `File` through an object URL**: no new endpoint, no path, nothing uploaded again, nothing served. The hook that selects the file keeps it in memory for playback and the object URL is revoked when it is replaced or the panel goes away. Limits: container and codec support is the browser's (a file it cannot decode is reported and nothing is acted on), and the file must still be in the page (a reload loses it; the panel then says so). The alternative (an authenticated, range-capable media endpoint) would be a security decision for the hardening checkpoint: media ids are bearer tokens today.
+
+### 30.2 Intervals and precision
+
+Canonical integer milliseconds, half-open `[start, end)` (the playhead at `end` is outside). Precision comes from the CP7 finding, which says how its timing was obtained:
+
+| Quality | Source | What is reliable | Action interval |
+| --- | --- | --- | --- |
+| `word` | speech with word timing | start aligned (about 0.1 s in the CP4 tests); **end approximate** (the next word's start, or at most one second after) | finding plus 150 ms before and 250 ms after |
+| `cue` | a subtitle cue (alone or with speech) | cue times exact as authored, but the **whole line**, not the word | the cue itself |
+| `segment` | speech without word timing | a recognizer boundary: coarse | the segment itself |
+
+Margins are constants in `PLAYBACK_POLICY`. Only one adjustment is ever made: a margin is clamped at 0 and at the media end (unambiguous). A candidate is **unavailable** (listed with its reason, never acted on, never repaired) when: the finding fails the CP7 validator (`invalid-finding`), the category is not implemented, the interval has zero length (`zero-length`), starts at or after the media end (`outside-media`), or the media duration is invalid (`invalid-duration`: not a positive integer; `null` means "not known yet", so no upper clamp). **Real data note:** in the QA run two of three speech findings had a zero-length word (start equal to end, which the CP4 alignment produces when no end can be derived), so they were unavailable; this is the safe outcome but means word-timed speech findings are less actionable than subtitle cues.
+
+### 30.3 Choices and precedence
+
+Per finding: `none` (default), `mute`, `skip`, `ignore`; plus a default for undecided findings (`none`, `mute` or `skip`) and a master switch. Choices are keyed by the **occurrence** (category, exact range, folded term), not by the finding id, because ids are numbered per request and shift when the term list changes. Precedence is immediate: the master switch and any choice are applied to the coordinator on the same render. Uncertain findings and unavailable ones get no action by default; an explicit user choice on an uncertain finding is honoured (it is the user's decision, shown as such), an unavailable one cannot be chosen at all. Choices live in component memory for the open video: nothing is persisted or sent.
+
+### 30.4 Coordinator rules
+
+- **Mute:** muted exactly while the playhead is inside an enabled mute span. Only the `muted` flag changes: **volume is never touched**, so user volume changes are inherently respected. The user's own mute is remembered and restored; if the user unmutes during a span that is respected until the span is left; the echo of the coordinator's own change is ignored. Overlapping or adjacent actions are one span (sound is never restored early). Position decides, so seek into/out/across, pause, resume, replay and playback-rate changes need no special cases.
+- **Skip:** when playback **enters** a span (the playhead advances into it, or play starts inside it) the player seeks to the span's end, capped at the duration. A seek the **user** makes into a span is respected (the span is suppressed until the playhead leaves it), so the user is never trapped; a large jump without a seek event counts as the user's. A skip waits for its own seek (stale updates are ignored), always moves strictly forward (so no loop is possible), is retried at most 3 times if the player lands early, then gives up and says so. Replay after the end is a fresh run. Skip wins over mute where they overlap.
+- **Off:** with automatic actions off, or without actions, sound is restored at once and nothing is skipped. Switching an action from mute to skip mid-interval unmutes and skips on the next update. `dispose` (media change, unmount) restores the user's sound and clears everything.
+- **Boundaries:** `timeupdate` fires about 4 times a second, which would blur boundaries by up to 250 ms. The hook also schedules a timer for the **next boundary** (`msUntilNextBoundary`, in real time at the current rate, 40 ms lead, at least 20 ms and at most 500 ms apart) and runs an animation-frame loop while playing. Both are needed: measured in the embedded browser, animation frames were throttled to about **2 per second**, and a mute that relied on them started 330 ms late; with the boundary timer it started 24 ms after the boundary (sampling resolution 20 ms).
+
+### 30.5 Failure behaviour
+
+An exception anywhere in the coordinator disposes it (restoring the user's sound), stops automatic actions, disables the switch, reports once ("Automatic actions stopped because of an error") and leaves the player and its controls alone. A file the browser cannot play is reported. Pending, unavailable, not-evaluated and partial analyses each have their own message and produce no actions beyond real findings. Malformed findings make candidates unavailable; nothing is guessed.
+
+### 30.6 Security and privacy
+
+No endpoint was added or changed, no filesystem access is possible from playback controls (the browser reads the `File` it was handed), nothing is sent to the server by playback, and client findings are never trusted over server findings (the findings come from the CP7 endpoint unchanged). Terms and reasons render as text. **Unchanged production gates (NOT solved):** authentication (media ids are bearer tokens), rate limiting, disk quota, sandboxing.
+
+### 30.7 Performance
+
+`npm run check:playback` (one hour of 60 fps playback, every frame an event; half the findings skip, half mute): per event 25 to 60 ns at 10 to 10 000 findings; setup (plan, resolve, merge) 0.02 ms at 10, 1.2 ms at 1 000, 13 ms at 10 000 findings, paid only when findings or choices change. Handlers do a binary search and a few comparisons: no sorting, classification or I/O per event.
+
+### 30.8 Limitations
+
+Not sample accurate (see 30.2 and the 20 to 40 ms observed start); muting is the player's own flag, so the file is never edited and there is no beep or audio replacement; the interval of a word-timed finding includes a margin and may cut neighbouring words; subtitle-cue findings mute or skip the whole line; the playhead is polled, so a very short interval can be missed by a stalled player; skipping to the exact end depends on the player's seek accuracy (keyframes) and is retried; formats the browser cannot decode cannot be played; the file must stay in the page; only flagged terms are supported.

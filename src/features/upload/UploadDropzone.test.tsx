@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMediaIngestion } from '@/application/mediaIngestion';
 import type { MediaProcessor } from '@/application/mediaProcessor';
@@ -8,6 +8,7 @@ import { normalizeMetadata } from '@/domain/media/metadata';
 import { HEADERS, makeFile } from '@/test/files';
 import { completedExtraction, processingExtraction } from '@/test/extraction';
 import { processingTextAnalysis, readyTextAnalysis } from '@/test/textAnalysis';
+import { installFakeVideo } from '@/test/media';
 import { safetyFor } from '@/test/safetyAnalysis';
 import { readyContext } from '@/test/contextAnalysis';
 import { processingVisual, readyVisual } from '@/test/visualAnalysis';
@@ -625,3 +626,75 @@ describe('UploadDropzone safety classification foundation — after the evidence
     expect(screen.getByText('Media: ready')).toBeInTheDocument();
   });
 });
+
+describe('UploadDropzone playback — from the user’s own file to a playback action', () => {
+  const readyAsset = () => ({
+    id: 'srv-1', filename: 'clip.mp4', mimeType: 'video/mp4', container: 'mp4' as const, typeLabel: 'MP4 video', sizeBytes: 2048,
+    status: 'ready' as const, metadata: ffprobeMeta, createdAt: 'x', failure: null,
+  });
+  const ingestion = () =>
+    createMediaIngestion({
+      uploader: {
+        upload: async () => ({ asset: readyAsset(), analysis: { status: 'not_started' }, extraction: { status: 'queued', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null } }),
+        waitForExtraction: async (id) => completedExtraction(id), waitForTextAnalysis: async (id) => readyTextAnalysis(id), waitForVisualAnalysis: async (id) => readyVisual(id),
+        loadContext: async (id) => readyContext(id), loadSafetyFindings: async (id) => safetyFor(id, [['safe watch', 'phrase']]), remove: vi.fn(async () => undefined),
+      },
+      maxBytes: 10 * MB,
+    });
+  const urls: string[] = []; const revoked: string[] = [];
+  beforeEach(() => {
+    window.localStorage.clear(); filtersStore.reload(); urls.length = 0; revoked.length = 0;
+    URL.createObjectURL = vi.fn(() => { const u = `blob:clip-${urls.length}`; urls.push(u); return u; });
+    URL.revokeObjectURL = vi.fn((u: string) => { revoked.push(u); });
+    filtersStore.add('safe watch', 'phrase');
+  });
+
+  it('after the safety findings it plays the very file the user chose, and the findings become actions the user controls', async () => {
+    render(<UploadDropzone ingestion={ingestion()} />);
+    const file = makeFile('clip.mp4', HEADERS.mp4);
+    drop(file);
+    const player = (await screen.findByLabelText('Uploaded video preview')) as HTMLVideoElement;
+    expect(URL.createObjectURL).toHaveBeenCalledWith(file);
+    expect(player.getAttribute('src')).toBe('blob:clip-0');
+    const rows = await screen.findByRole('list', { name: 'Findings and actions' });
+    expect(within(rows).getAllByRole('listitem').length).toBeGreaterThan(0);
+    const fake = installFakeVideo(player, 24);
+    await act(async () => { fake.loaded(); });
+    const choose = within(rows).getAllByRole('combobox')[0]!;
+    await userEvent.selectOptions(choose, 'mute');
+    const first = safetyFirstInterval();
+    await act(async () => { await fake.advanceTo(first.startSeconds + 0.3); });
+    expect(fake.muted()).toBe(true);
+    await userEvent.click(screen.getByRole('switch', { name: 'Automatic actions' }));
+    expect(fake.muted()).toBe(false);
+    expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
+  });
+
+  it('choosing another video replaces the player and its URL, and old choices do not carry over', async () => {
+    render(<UploadDropzone ingestion={ingestion()} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    const rows = await screen.findByRole('list', { name: 'Findings and actions' });
+    await userEvent.selectOptions(within(rows).getAllByRole('combobox')[0]!, 'skip');
+    // Other panels now contain role="group" timelines, so the second file goes in through the file input.
+    fireEvent.change(screen.getByLabelText('Video file'), { target: { files: [makeFile('second.mp4', HEADERS.mp4)] } });
+    await waitFor(() => expect(urls.length).toBe(2));
+    expect(revoked).toContain('blob:clip-0');
+    const rows2 = await screen.findByRole('list', { name: 'Findings and actions' });
+    expect(within(rows2).getAllByRole('combobox')[0]).toHaveValue('none');
+  });
+
+  it('shows no player and no actions while the safety analysis is still being waited for', async () => {
+    let finish!: () => void;
+    const slow = ingestion();
+    const orig = slow.loadContext.bind(slow);
+    slow.loadContext = (asset) => new Promise((resolve) => { finish = () => resolve(orig(asset)); });
+    render(<UploadDropzone ingestion={slow} />);
+    drop(makeFile('clip.mp4', HEADERS.mp4));
+    expect(await screen.findByText('Waiting for the safety analysis. Nothing is acted on until it arrives.')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Findings and actions' })).not.toBeInTheDocument();
+    await act(async () => finish());
+    expect(await screen.findByRole('list', { name: 'Findings and actions' })).toBeInTheDocument();
+  });
+});
+
+const safetyFirstInterval = () => ({ startSeconds: 1.5 });

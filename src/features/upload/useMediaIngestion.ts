@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import type { MediaIngestion } from '@/application/mediaIngestion';
 import { unavailableTextAnalysis, type TextAnalysisIssueCode } from '@/domain/text/textAnalysis';
 import { unavailableContext } from '@/domain/context/contextAnalysis';
@@ -41,6 +41,8 @@ function visualCodeFor(error: unknown): VisualIssue['code'] {
 export function useMediaIngestion(ingestion: MediaIngestion) {
   const [state, dispatch] = useReducer(ingestionReducer, initialIngestionState);
   const run = useRef(0);
+  // The user's own file, kept in this browser so it can be played back. It is never sent anywhere by this hook.
+  const [playbackFile, setPlaybackFile] = useState<File | null>(null);
   const latest = useRef(state);
 
   useEffect(() => { latest.current = state; }, [state]);
@@ -53,6 +55,7 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
 
       const id = ++run.current;
       const live = () => run.current === id;
+      setPlaybackFile(null);
       dispatch({ type: 'select', fileName: file.name });
       let ready: MediaAsset;
       try {
@@ -69,6 +72,7 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
         }
         ready = prepared.asset;
         dispatch({ type: 'ready', asset: ready, analysis: prepared.analysis });
+        setPlaybackFile(file);
       } catch (error) {
         if (live()) dispatch({ type: 'fail', error });
         return;
@@ -123,7 +127,7 @@ export function useMediaIngestion(ingestion: MediaIngestion) {
     [ingestion],
   );
 
-  const reset = useCallback(() => dispatch({ type: 'reset' }), []);
+  const reset = useCallback(() => { dispatch({ type: 'reset' }); setPlaybackFile(null); }, []);
 
-  return { state, select, reset };
+  return { state, select, reset, playbackFile };
 }

@@ -23,7 +23,8 @@ import { ExtractionBadge, ExtractionPanel } from './ExtractionPanel';
 import { TextBadge, TranscriptPanel } from './TranscriptPanel';
 import { VisualBadge, VisualPanel } from './VisualPanel';
 import { ContextBadge, ContextPanel } from './ContextPanel';
-import { SafetyPanel } from './SafetyPanel';
+import { SafetyPanel, type SafetyLoad } from './SafetyPanel';
+import { PlaybackPanel } from '@/features/playback/PlaybackPanel';
 import { useMediaIngestion } from './useMediaIngestion';
 import './upload.css';
 
@@ -39,7 +40,7 @@ interface UploadDropzoneProps {
  * prepares a MediaAsset locally. Nothing is uploaded and no analysis runs.
  */
 export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = config.maxUploadBytes, disabled = false }: UploadDropzoneProps) {
-  const { state, select } = useMediaIngestion(ingestion);
+  const { state, select, playbackFile } = useMediaIngestion(ingestion);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const headingId = useId();
@@ -134,6 +135,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
           visual={state.status === 'ready' ? state.visual : null}
           context={state.status === 'ready' ? state.context : null}
           ingestion={ingestion}
+          playbackFile={playbackFile}
           mode={ingestion.mode}
           onReplace={openPicker}
         />
@@ -170,11 +172,13 @@ interface AssetSummaryProps {
   visual: VisualAnalysis | null;
   context: ContextAnalysis | null;
   ingestion: MediaIngestion;
+  playbackFile: File | null;
   mode: 'local' | 'server';
   onReplace: () => void;
 }
 
-function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, visual, context, ingestion, mode, onReplace }: AssetSummaryProps) {
+function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction, analysis, extraction, textAnalysis, visual, context, ingestion, playbackFile, mode, onReplace }: AssetSummaryProps) {
+  const [safety, setSafety] = useState<SafetyLoad>({ state: 'loading' });
   const m = asset.metadata;
   const ready = status === 'ready';
   const uploading = status === 'processing' && phase === 'uploading';
@@ -228,7 +232,8 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
       {ready && mode === 'server' && <ExtractionPanel extraction={extraction} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <TranscriptPanel analysis={textAnalysis} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <ContextPanel context={context} />}
-      {ready && mode === 'server' && extraction?.status === 'completed' && <SafetyPanel ingestion={ingestion} asset={asset} evidenceReady={context !== null && context.status !== 'pending'} />}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <SafetyPanel ingestion={ingestion} asset={asset} evidenceReady={context !== null && context.status !== 'pending'} onLoad={setSafety} />}
+      {ready && mode === 'server' && extraction?.status === 'completed' && <PlaybackPanel key={asset.id} file={playbackFile} mediaId={asset.id} safety={safety} />}
       {ready && mode === 'server' && extraction?.status === 'completed' && <VisualPanel analysis={visual} frameUrl={(frameId) => `${config.apiBaseUrl}${API_PATHS.frame(asset.id, frameId)}`} />}
       {ready && (
         <div className="sw-upload__alert">

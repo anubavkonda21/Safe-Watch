@@ -11,7 +11,8 @@ import { useCustomFilters } from '@/features/filters/filtersStore';
 import { cn } from '@/lib/cn';
 import { abstainText, analysisWarningText, categoryStatusText, warningText } from './safetyCopy';
 
-type Load = { state: 'loading' } | { state: 'unavailable' } | { state: 'ready'; analysis: SafetyAnalysis };
+export type SafetyLoad = { state: 'loading' } | { state: 'unavailable' } | { state: 'ready'; analysis: SafetyAnalysis };
+type Load = SafetyLoad;
 
 const tc = (ms: number) => formatTimecode(ms / 1000);
 const range = (f: { startMs: number; endMs: number }) => `${tc(f.startMs)} to ${tc(f.endMs)}`;
@@ -23,6 +24,8 @@ interface SafetyPanelProps {
   asset: MediaAsset;
   /** True once the evidence steps (text, visual, context) have finished, so the server has something to classify. */
   evidenceReady: boolean;
+  /** Told about every change of the result, so other panels (playback) can use the same findings without asking the server again. */
+  onLoad?: (load: SafetyLoad) => void;
 }
 
 /**
@@ -30,7 +33,7 @@ interface SafetyPanelProps {
  * evidence. Today ONLY flagged terms in speech and subtitles are classified; every other category is shown as not supported.
  * There is no overall score and no verdict, and nothing is changed or hidden.
  */
-export function SafetyPanel({ ingestion, asset, evidenceReady }: SafetyPanelProps) {
+export function SafetyPanel({ ingestion, asset, evidenceReady, onLoad }: SafetyPanelProps) {
   const filters = useCustomFilters();
   const terms = filters.filter((f) => f.enabled).map((f) => ({ phrase: f.phrase, matchMode: f.matchMode }));
   const key = JSON.stringify(terms);
@@ -46,6 +49,9 @@ export function SafetyPanel({ ingestion, asset, evidenceReady }: SafetyPanelProp
     }, 200);
     return () => { clearTimeout(timer); controller.abort(); };
   }, [ingestion, asset, evidenceReady, key]);
+
+  const shown: SafetyLoad = evidenceReady ? load : { state: 'loading' };
+  useEffect(() => { onLoad?.(shown); }, [onLoad, shown.state, shown.state === 'ready' ? shown.analysis : null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!evidenceReady || load.state === 'loading') {
     return (
