@@ -1,6 +1,6 @@
 # CHECKPOINT 10 REPORT: Security Hardening
 
-**Result: partially complete.** The objectives were implemented and tested for one deployment: a single person on one macOS machine, API on loopback. **SafeWatch is not generally production-ready**: there is no sandbox on Linux or Windows, no TLS, no real user accounts, no encryption at rest, no CSP, no shared rate limiting, and the page still loads Google Fonts. Parent commit `a8a36740050897d93e95506af6dfcc58ec5c5a69`. Design and findings: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.
+**Result: partially complete.** The objectives were implemented and tested for one deployment: a single person on one macOS machine, API on loopback. **SafeWatch is not generally production-ready**: there is no sandbox on Linux or Windows, no TLS, no real user accounts, no encryption at rest, no CSP, no shared rate limiting, (the Google Fonts request found during the audit was removed in a follow-up, see section 5). Parent commit `a8a36740050897d93e95506af6dfcc58ec5c5a69`. Design and findings: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.
 
 Legend: **[T]** implemented and tested · **[P]** implemented, incompletely tested · **[N]** not implemented · **[G]** release gate / deployment dependent.
 
@@ -61,8 +61,8 @@ Not a CP10 race. Reproduced deliberately: two suites at once passed; with **four
 - **Is shutdown cleanup safe in every lifecycle state?** Tested with the real process: during extraction, during an upload, idle, double signal, restart on the same directory, and refusal to start on a directory it does not own (its files untouched). **Not safe against SIGKILL/crash**: tools may outlive the server until they finish; the next start purges the directory.
 - **Whisper temp JSON / crash recovery:** outside the quota; swept at startup if older than an hour.
 
-## 5. Privacy discrepancy
-`index.html` loads Inter from `fonts.googleapis.com` (since CP0A) — verified still present. CP9's "no third-party requests" was wrong and is corrected. Google can see the visitor's IP and user agent on each page load; no media, transcript or phrase is sent. Self-hosting the font removes it; I did not download or add a font without approval.
+## 5. Privacy discrepancy (resolved in a follow-up)
+`index.html` loaded Inter from `fonts.googleapis.com` (since CP0A), so every page load disclosed the visitor's IP and user agent to Google (no media, transcript or phrase). CP9's "no third-party requests" was wrong and was corrected. Follow-up: Inter v4.1 `InterVariable.woff2` from the official release (rsms/inter, zip SHA-256 `9883fdd4…b11e`) is served from `public/fonts/` with its OFL licence; the three `<link>` tags are gone. Verified in a browser on a fresh load: the only origin is `localhost:5173`, one font request, same layout metrics as before.
 
 ## 6. Known limitations
 Single-user/macOS/loopback only; sandbox reads and resources unrestricted; deprecated `sandbox-exec`; sessions are browser-profile scoped and lost on restart; clearing cookies strands your media until it expires; unencrypted storage; shared-address rate limit pooling; whisper temp JSON uncounted; Windows/Linux and HTTPS unverified; no independent review.

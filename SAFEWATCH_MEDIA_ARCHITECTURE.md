@@ -692,7 +692,7 @@ Assets: uploaded media and everything derived from it (audio, frames, transcript
 | F8 | Low | Query parsing was lenient (`words=maybe` meant true; unknown parameters ignored). | Fixed [T] |
 | F9 | Low | `SAFEWATCH_HOST=0.0.0.0` silently exposed an API with no accounts. | Fixed [T] (explicit opt-in + host list) |
 | F10 | Low | Relative tool/model paths resolved against the working directory. | Fixed [T] |
-| F11 | Info (privacy) | `index.html` loads Google Fonts from `fonts.googleapis.com` (since CP0A): a third-party request on every page load that discloses the visitor's IP and user agent to Google. CP9 documentation wrongly said there were no third-party requests. | **Open** [G]; documentation corrected; fix = self-host Inter (needs a font file; awaiting approval) |
+| F11 | Info (privacy) | `index.html` loads Google Fonts from `fonts.googleapis.com` (since CP0A): a third-party request on every page load that discloses the visitor's IP and user agent to Google. CP9 documentation wrongly said there were no third-party requests. | **Fixed** [T: verified in a browser]: Inter v4.1 (official release, OFL 1.1) is now served from `public/fonts/`; `index.html` has no external request |
 | F12 | Info | No Content-Security-Policy or other security headers for the SPA (the API does not serve the SPA). | Open [N] |
 | F13 | Info | Dev dependency advisory: vite 8.3.0-8.3.2 (dev server; high). `npm audit --omit=dev`: 0. | Fixed by lockfile bump to 8.3.5 [T: build and tests re-run] |
 | Not findings | | Shell injection (argv arrays, `shell:false`), path traversal through ids (strict UUID + artifact allow-list), logging of phrases/filenames, internal-error leakage: inspected and confirmed already safe; tests added. | |
@@ -748,7 +748,7 @@ Loopback by default. A non-loopback `SAFEWATCH_HOST` needs `SAFEWATCH_ALLOW_NETW
 | Encryption at rest | [N] |
 | Shared / distributed rate limiting, proxy-aware client addresses | [N] |
 | Content-Security-Policy and security headers for the SPA | [N] |
-| Third-party Google Fonts request (F11) | [G] open |
+| Third-party Google Fonts request (F11) | closed (self-hosted Inter) |
 | Quota coverage of whisper's temp JSON | [N] |
 | Independent security review, fuzzing of the media parsers, penetration test | [N] |
 | Cross-site deployment (SPA and API on different sites) | unsupported |
