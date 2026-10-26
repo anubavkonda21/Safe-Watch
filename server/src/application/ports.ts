@@ -29,6 +29,8 @@ export class StorageError extends Error {
  * server; user filenames never reach storage.
  */
 export interface MediaStorage {
+  /** Free bytes on the volume holding the storage, or null if unknown. */
+  freeBytes?(): Promise<number | null>;
   /** Streams `source` into storage. Never buffers the whole file. Cleans up partial data on any failure. */
   save(id: string, source: AsyncIterable<Uint8Array>, options: { maxBytes: number; signal?: AbortSignal }): Promise<{ sizeBytes: number }>;
   exists(id: string): Promise<boolean>;
@@ -57,6 +59,7 @@ export interface MediaRepository {
   set(record: MediaRecord): void;
   delete(id: string): void;
   expired(now: number): MediaRecord[];
+  byOwner(ownerId: string): MediaRecord[];
 }
 
 export type MediaInput = LocalMediaFile & { readonly container: ContainerFormat };

@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 10 — security hardening (single-user, macOS, loopback only).** The API now has per-browser sessions with media ownership checks, Host/Origin protections, rate limits, a disk quota, a macOS sandbox for FFmpeg, FFprobe, whisper.cpp and the Vision helper, process-group termination and a clean shutdown. **This is not a general production-ready release**: there is no sandbox on Linux or Windows, no TLS, no real user accounts, no encryption at rest, no CSP, and the page still loads Google Fonts (a third-party request). See `CHECKPOINT_10_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.
+
 **Checkpoint 9 — complete product experience.** The playback panel now warns you shortly before a supported finding (default 20 s ahead, shown for 3 s), with **Skip** and **Ignore** buttons that reuse the Checkpoint 8 actions; ignoring the warning does nothing. Your flagged-term list can be added to, edited and removed with a clear saved / active / not-yet-applied state, and playback preferences (warnings on or off, lead time, visible time, default action) are saved in this browser after validation. You can report a missed finding (stored only in this browser, never sent, never used to train anything) and the page explains plainly what was analyzed and why a finding may be unavailable. **Still only flagged terms in speech and subtitles are detected.** No sexual, violence, graphic or drug detection exists, there is no safety score, and a result without findings does not mean a video is safe. See `CHECKPOINT_9_REPORT.md`.
 
 **Checkpoint 8 — playback safety actions.** The uploaded video can now be played in the page (the browser's own player on your own file, no server involved) and the findings of Checkpoint 7 can drive **mute** and **skip** while you watch. Nothing happens until you choose (the default is no action), only findings that exist today (flagged terms in speech and subtitles) can trigger an action, uncertain findings are never acted on unless you choose it, and a master switch and per-finding choices (mute, skip, ignore, none) take effect immediately. The media is not edited, timing is not sample accurate, and no visual or other category is detected. See `CHECKPOINT_8_REPORT.md`.
@@ -47,7 +49,7 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 | Reliable Hindi transcription | PARTIAL — needs the `small` model; Hindi/English code-switching NOT supported |
 | OCR of image subtitles | NOT IMPLEMENTED |
 | Scene detection | NOT IMPLEMENTED |
-| Persistent database, authentication, background workers | PLANNED |
+| Persistent database, user accounts, background workers | PLANNED |
 | Responsive layout, accessibility foundation | IMPLEMENTED |
 | Tests, lint, typecheck, build | IMPLEMENTED |
 | Safety classification of visual evidence (violence, sexual, drugs), safety score, verdicts | PLANNED (not implemented) |
@@ -239,6 +241,19 @@ the video's duration ───────────►                       
 - **Feedback:** a missed-finding report (timestamp prefilled from the playhead, phrase, what it was, optional note) stored only in this browser; it never becomes a finding and does not train or guarantee anything. Review and delete in the panel.
 - **Honesty:** supported media, evidence availability and "no findings is not a safety verdict" are stated on the page.
 - Details: `SAFEWATCH_MEDIA_ARCHITECTURE.md` §31.
+
+## Security and deployment (Checkpoint 10)
+
+Supported setup: one person, one macOS machine, API on `127.0.0.1`, SPA and API in the same browser (the Vite proxy in development, one origin in production).
+
+- **Sessions:** your first upload starts an anonymous session (HttpOnly cookie, no accounts). Media belongs to that session; another browser, or knowing a media id, gives no access. Clearing cookies loses access to your media (it is deleted on schedule anyway). Idle sessions expire after 24 h.
+- **Limits:** 10 uploads/min, 5 media and 4 GB per session, 10 GB total, 512 MB of the disk always left free; all configurable in `.env.example`.
+- **Sandbox:** on macOS the tools run with no network, no new processes and writes only to their own work directory. Startup logs `sandbox: seatbelt`. In production a sandbox is required, so the server will not start on Linux or Windows.
+- **Exposure:** the server refuses a non-loopback host unless `SAFEWATCH_ALLOW_NETWORK_BIND=true` and `SAFEWATCH_ALLOWED_HOSTS` are both set; do not do this: there are no accounts.
+- **Production start:** `NODE_ENV=production SAFEWATCH_STORAGE_DIR=/dedicated/empty/dir npm run build:server && npm start`. Everything in that directory is deleted at start and stop. Media is stored **unencrypted** for at most `SAFEWATCH_RETENTION_MINUTES`; deleting it earlier is `DELETE /api/media/:id` or stopping the server.
+- **Not done:** see the release-gate table in `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.12.
+- **Privacy note:** `index.html` loads the Inter font from Google Fonts, so each page load contacts `fonts.googleapis.com` (your IP and user agent are visible to Google; media, transcripts and phrases are not sent). Self-hosting the font would remove this and is pending approval.
+- **Checks:** `npm audit` (0 vulnerabilities after the vite 8.3.5 lockfile update) and the `server/test/security*.test.ts` suites.
 
 ## Technology stack
 

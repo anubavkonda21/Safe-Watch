@@ -9,22 +9,22 @@ const meta = { ...PENDING_METADATA, availability: 'available' as const, source: 
 
 describe('server media record', () => {
   it('starts uploaded with analysis NOT started and an expiry', () => {
-    const r = createUploadedRecord(asset, 1000, 500);
+    const r = createUploadedRecord(asset, 'owner', 1000, 500);
     expect(r.asset.status).toBe('uploaded');
     expect(r.analysis).toEqual({ status: 'not_started' });
     expect(r.expiresAt).toBe(1500);
   });
   it('uploaded → processing → ready keeps media and analysis status separate', () => {
-    const r = markReady(markProcessing(createUploadedRecord(asset, 0, 1)), meta);
+    const r = markReady(markProcessing(createUploadedRecord(asset, 'owner', 0, 1)), meta);
     expect(r.asset).toMatchObject({ status: 'ready', metadata: { durationSeconds: 3 } });
     expect(toResource(r)).toEqual({ asset: r.asset, extraction: { status: 'not_started', phase: null }, text: { status: 'not_started', phase: null }, visual: { status: 'not_started', phase: null, progress: null }, analysis: { status: 'not_started' } });
   });
   it('processing → failed records the typed failure', () => {
-    const r = markFailed(markProcessing(createUploadedRecord(asset, 0, 1)), 'timeout');
+    const r = markFailed(markProcessing(createUploadedRecord(asset, 'owner', 0, 1)), 'timeout');
     expect(r.asset).toMatchObject({ status: 'failed', failure: { code: 'timeout' } });
   });
   it('uploaded → failed is allowed', () => {
-    expect(markFailed(createUploadedRecord(asset, 0, 1), 'storage-failure').asset.status).toBe('failed');
+    expect(markFailed(createUploadedRecord(asset, 'owner', 0, 1), 'storage-failure').asset.status).toBe('failed');
   });
   it.each([
     ['uploaded → ready', (r: ReturnType<typeof createUploadedRecord>) => markReady(r, meta)],
@@ -32,6 +32,6 @@ describe('server media record', () => {
     ['failed → ready', (r: ReturnType<typeof createUploadedRecord>) => markReady(markFailed(r, 'timeout'), meta)],
     ['ready → failed', (r: ReturnType<typeof createUploadedRecord>) => markFailed(markReady(markProcessing(r), meta), 'timeout')],
   ])('rejects illegal transition %s', (_n, fn) => {
-    expect(() => fn(createUploadedRecord(asset, 0, 1))).toThrow(InvalidTransitionError);
+    expect(() => fn(createUploadedRecord(asset, 'owner', 0, 1))).toThrow(InvalidTransitionError);
   });
 });

@@ -1,5 +1,5 @@
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { constants, createWriteStream } from 'node:fs';
+import { lstat, mkdir, open as openFile, readdir, rename, rm, stat, statfs, writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -54,6 +54,16 @@ export class LocalDiskMediaStorage implements MediaStorage {
     return p;
   }
 
+  async freeBytes(): Promise<number | null> {
+    try {
+      await this.init();
+      const f = await statfs(this.root);
+      return Number(f.bavail) * Number(f.bsize);
+    } catch {
+      return null;
+    }
+  }
+
   async save(id: string, source: AsyncIterable<Uint8Array>, options: { maxBytes: number; signal?: AbortSignal }) {
     await this.init();
     const part = this.pathFor(id, 'part');
@@ -79,13 +89,28 @@ export class LocalDiskMediaStorage implements MediaStorage {
     }
   }
 
+  /** A regular file that is not a link. Anything else in the storage directory is not ours and is never read. */
+  private async isOwnFile(path: string): Promise<boolean> {
+    try { return (await lstat(path)).isFile(); } catch { return false; }
+  }
+
   async exists(id: string): Promise<boolean> {
     await this.init();
-    try { return (await stat(this.pathFor(id, 'media'))).isFile(); } catch { return false; }
+    return this.isOwnFile(this.pathFor(id, 'media'));
+  }
+
+  /** O_NOFOLLOW: even if a link were swapped in after the check, opening it fails instead of reading its target. */
+  private async *open(path: string): AsyncGenerator<Uint8Array> {
+    const handle = await openFile(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      for await (const chunk of handle.createReadStream({ autoClose: false })) yield chunk as Uint8Array;
+    } finally {
+      await handle.close();
+    }
   }
 
   read(id: string): AsyncIterable<Uint8Array> {
-    return createReadStream(this.pathFor(id, 'media'));
+    return this.open(this.pathFor(id, 'media'));
   }
 
   async withLocalFile<T>(id: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T> {
@@ -97,6 +122,7 @@ export class LocalDiskMediaStorage implements MediaStorage {
     await this.init();
     const dir = this.pathFor(id, 'extraction');
     await mkdir(dir, { recursive: true, mode: 0o700 });
+    if (!(await lstat(dir)).isDirectory()) throw new StorageError('failed', 'Extraction path is not a directory'); // e.g. a planted link
     return fn({ dir });
   }
 
@@ -111,13 +137,12 @@ export class LocalDiskMediaStorage implements MediaStorage {
   async withArtifactFile<T>(id: string, artifact: string, fn: (file: LocalMediaFile) => Promise<T>): Promise<T> {
     await this.init();
     const path = this.artifactPath(id, artifact);
-    const info = await stat(path).catch(() => null);
-    if (!info?.isFile()) throw new StorageError('not-found');
+    if (!(await this.isOwnFile(path))) throw new StorageError('not-found');
     return fn({ path });
   }
 
   readArtifact(id: string, artifact: string): AsyncIterable<Uint8Array> {
-    return createReadStream(this.artifactPath(id, artifact));
+    return this.open(this.artifactPath(id, artifact));
   }
 
   async deleteArtifact(id: string, artifact: string): Promise<void> {

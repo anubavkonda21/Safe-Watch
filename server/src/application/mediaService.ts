@@ -12,33 +12,38 @@ import type { ContextConfig } from '@/domain/context/contextEvent';
 import { analyzeSafety } from '@/domain/safety/analyze';
 import type { SafetyAnalysis } from '@/domain/safety/finding';
 import type { CustomFilter } from '@/domain/text/customFilter';
-import { createUploadedRecord, markFailed, markProcessing, markReady, toResource } from '../domain/mediaRecord';
+import { createUploadedRecord, markFailed, markProcessing, markReady, toResource, type MediaRecord } from '../domain/mediaRecord';
 import { MediaServiceError } from './errors';
 import type { Logger, MediaRepository, MediaStorage, ServerMediaProcessor } from './ports';
 import { StorageError } from './ports';
 import type { ExtractionScheduler } from './extractionService';
+import type { StorageQuota } from './storageQuota';
 import type { ProcessingQueue } from './processingQueue';
 
 export interface MediaServiceDeps {
   storage: MediaStorage;
+  /** Byte/item accounting for everything kept on disk. Capacity is reserved before bytes are written. */
+  quota: StorageQuota;
   repository: MediaRepository;
   processor: ServerMediaProcessor;
   queue: ProcessingQueue;
   /** Optional: when present, extraction is scheduled as soon as media is ready and cancelled before media is deleted. */
   extraction?: ExtractionScheduler;
   /** Optional: text analysis is cancelled before media is deleted. */
-  textAnalysis?: { cancel(mediaId: string): void };
+  textAnalysis?: { cancel(mediaId: string): void; cancelAll?(): void };
   /** Optional: visual analysis is cancelled before media is deleted. */
-  visualAnalysis?: { cancel(mediaId: string): void };
+  visualAnalysis?: { cancel(mediaId: string): void; cancelAll?(): void };
   /** Temporal correlation settings; the domain defaults apply when omitted. */
   context?: Partial<ContextConfig>;
   logger: Logger;
-  limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number };
+  limits: { maxUploadBytes: number; maxConcurrentUploads: number; processingTimeoutMs: number; retentionMs: number; minFreeDiskBytes?: number };
   now?: () => number;
   newId?: () => string;
 }
 
 export interface UploadInput {
+  /** The authenticated session that will own the media (server-derived, never from the request body). */
+  ownerId: string;
   body: AsyncIterable<Uint8Array>;
   /** Declared by the client: untrusted. */
   filename: string;
@@ -63,6 +68,7 @@ const FROM_VALIDATION: Record<string, MediaServiceError['code']> = {
  */
 export class MediaService {
   private activeUploads = 0;
+  private closed = false;
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -79,6 +85,7 @@ export class MediaService {
 
   async upload(input: UploadInput): Promise<MediaResource> {
     const { storage, repository, logger, limits } = this.deps;
+    if (this.closed) throw new MediaServiceError('SERVER_BUSY');
     const started = this.now();
 
     // Cheap checks first: nothing has been read from the network or written to disk yet.
@@ -92,14 +99,28 @@ export class MediaService {
       throw new MediaServiceError('SERVER_BUSY');
     }
 
+    // Capacity is reserved BEFORE any byte is written. The browser's declared length is only a claim: it becomes the
+    // hard limit of the stream, so a client that sends more than it declared is cut off. Without a declared length the
+    // reservation is the full upload limit.
     const id = this.newId();
+    const reserveBytes = Math.min(input.contentLength ?? limits.maxUploadBytes, limits.maxUploadBytes);
+    const free = await storage.freeBytes?.();
+    if (typeof free === 'number' && free - reserveBytes < (limits.minFreeDiskBytes ?? 0)) {
+      logger.warn('upload rejected', { op: 'upload', requestId: input.requestId, status: 'rejected', code: 'QUOTA_EXCEEDED', reason: 'disk-free' });
+      throw new MediaServiceError('QUOTA_EXCEEDED');
+    }
+    const reservation = this.deps.quota.reserve(id, input.ownerId, reserveBytes);
+    if (typeof reservation === 'string') {
+      logger.warn('upload rejected', { op: 'upload', requestId: input.requestId, status: 'rejected', code: 'QUOTA_EXCEEDED', reason: `quota-${reservation}` });
+      throw new MediaServiceError('QUOTA_EXCEEDED');
+    }
     const sniffed: { container: ContainerFormat | null } = { container: null };
     this.activeUploads += 1;
     try {
       const tapped = this.sniffEarly(input.body, input.filename, (c) => { sniffed.container = c; });
       let sizeBytes: number;
       try {
-        ({ sizeBytes } = await storage.save(id, tapped, { maxBytes: limits.maxUploadBytes, signal: input.signal }));
+        ({ sizeBytes } = await storage.save(id, tapped, { maxBytes: reserveBytes, signal: input.signal }));
       } catch (e) {
         throw this.mapUploadError(e, input.signal);
       }
@@ -122,7 +143,8 @@ export class MediaService {
         createdAt: new Date(this.now()).toISOString(),
         failure: null,
       };
-      const record = createUploadedRecord(asset, this.now(), limits.retentionMs);
+      this.deps.quota.resize(id, sizeBytes); // settle the reservation to the bytes actually written
+      const record = createUploadedRecord(asset, input.ownerId, this.now(), limits.retentionMs);
       repository.set(record);
       logger.info('upload stored', { op: 'upload', requestId: input.requestId, mediaId: id, status: 'uploaded', sizeBytes, durationMs: this.now() - started });
 
@@ -130,6 +152,7 @@ export class MediaService {
       return toResource(record);
     } catch (e) {
       await this.safeDelete(id); // covers every failure path, including ones that left partial data
+      this.deps.quota.release(id); // a failed upload never keeps its reservation, even if the file delete must be retried by the sweep
       if (!(e instanceof MediaServiceError)) throw e;
       logger.warn('upload rejected', { op: 'upload', requestId: input.requestId, mediaId: id, status: 'rejected', code: e.code, durationMs: this.now() - started });
       throw e;
@@ -138,23 +161,28 @@ export class MediaService {
     }
   }
 
-  get(id: string): MediaResource {
+  /**
+   * The only way a request reaches a record: it must exist AND belong to the caller's session. A malformed id, a missing
+   * record and another session's record are indistinguishable (all NOT_FOUND), so ids cannot be used to probe.
+   */
+  private owned(id: string, ownerId: string): MediaRecord {
     const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
-    return toResource(record);
+    if (!record || record.ownerId !== ownerId) throw new MediaServiceError('NOT_FOUND');
+    return record;
+  }
+
+  get(id: string, ownerId: string): MediaResource {
+    return toResource(this.owned(id, ownerId));
   }
 
   /** Full extraction manifest (assets and metrics). Contains no paths or tool output. */
-  getExtraction(id: string): MediaExtraction {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
-    return record.extraction;
+  getExtraction(id: string, ownerId: string): MediaExtraction {
+    return this.owned(id, ownerId).extraction;
   }
 
   /** Speech transcripts and subtitle timeline (text evidence). Contains no paths, provider output or credentials. */
-  getTextAnalysis(id: string, options: { words?: boolean } = {}): TextAnalysis {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
+  getTextAnalysis(id: string, ownerId: string, options: { words?: boolean } = {}): TextAnalysis {
+    const record = this.owned(id, ownerId);
     if (options.words === false) {
       // Word timing can be large; omit it on request.
       const strip = <T extends { words: unknown }>(x: T) => ({ ...x, words: null });
@@ -167,9 +195,8 @@ export class MediaService {
     return record.text;
   }
 
-  getVisualAnalysis(id: string, options: { observations?: boolean } = {}): VisualAnalysis {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
+  getVisualAnalysis(id: string, ownerId: string, options: { observations?: boolean } = {}): VisualAnalysis {
+    const record = this.owned(id, ownerId);
     return options.observations === false ? { ...record.visual, observations: [] } : record.visual;
   }
 
@@ -178,9 +205,8 @@ export class MediaService {
    * function of what the earlier stages produced (no model, no file access), so it is computed on request and never stored.
    * `evidence: false` omits the members of each event (a much smaller payload for polling).
    */
-  getContext(id: string, options: { evidence?: boolean } = {}): ContextAnalysis {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
+  getContext(id: string, ownerId: string, options: { evidence?: boolean } = {}): ContextAnalysis {
+    const record = this.owned(id, ownerId);
     const analysis = buildContextAnalysis({
       mediaId: record.asset.id, extractionStatus: record.extraction.status, mediaDurationSeconds: record.asset.metadata.durationSeconds,
       text: record.text, visual: record.visual, frameStepSeconds: record.extraction.frames?.effectiveIntervalSeconds ?? null, config: this.deps.context,
@@ -193,10 +219,9 @@ export class MediaService {
    * correlated context and the text timeline); nothing is re-extracted and no media is read. `terms` are the flagged terms
    * to look for (already validated). Unsupported categories and missing inputs are reported, never silently omitted.
    */
-  async getSafetyFindings(id: string, terms: readonly CustomFilter[]): Promise<SafetyAnalysis> {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    if (!record) throw new MediaServiceError('NOT_FOUND');
-    const context = this.getContext(id);
+  async getSafetyFindings(id: string, ownerId: string, terms: readonly CustomFilter[]): Promise<SafetyAnalysis> {
+    const record = this.owned(id, ownerId);
+    const context = this.getContext(id, ownerId);
     return analyzeSafety({ mediaId: record.asset.id, context, text: record.text, terms });
   }
 
@@ -204,21 +229,47 @@ export class MediaService {
    * A sampled frame, by its manifest id. Only ids listed in the extraction manifest resolve;
    * the client never supplies a path or an artifact name.
    */
-  getFrame(id: string, frameId: string): { stream: AsyncIterable<Uint8Array>; sizeBytes: number } {
-    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
-    const frame = record?.extraction.frames?.frames.find((f) => f.id === frameId);
-    if (!record || !frame) throw new MediaServiceError('NOT_FOUND');
+  getFrame(id: string, ownerId: string, frameId: string): { stream: AsyncIterable<Uint8Array>; sizeBytes: number } {
+    const record = this.owned(id, ownerId);
+    const frame = record.extraction.frames?.frames.find((f) => f.id === frameId);
+    if (!frame) throw new MediaServiceError('NOT_FOUND');
     return { stream: this.deps.storage.readArtifact(id, frame.artifact), sizeBytes: frame.sizeBytes };
   }
 
-  async delete(id: string): Promise<void> {
-    if (!isMediaId(id)) return;
+  /** Idempotent. Deleting something that does not exist, or that belongs to another session, is a silent no-op (and changes nothing). */
+  async delete(id: string, ownerId: string): Promise<void> {
+    const record = isMediaId(id) ? this.deps.repository.get(id) : undefined;
+    if (!record || record.ownerId !== ownerId) return;
     this.deps.extraction?.cancel(id);
     this.deps.textAnalysis?.cancel(id);
     this.deps.visualAnalysis?.cancel(id);
     this.deps.repository.delete(id);
     await this.safeDelete(id);
     this.deps.logger.info('media deleted', { op: 'delete', mediaId: id });
+  }
+
+  /**
+   * Deletes everything owned by sessions that no longer exist. Once its session is gone nobody can reach (or delete) that
+   * media, so keeping it would only hold disk and quota until retention expires.
+   */
+  async deleteOwners(ownerIds: readonly string[]): Promise<number> {
+    let n = 0;
+    for (const owner of ownerIds) {
+      for (const record of this.deps.repository.byOwner(owner)) {
+        await this.delete(record.asset.id, owner);
+        n += 1;
+      }
+    }
+    if (n > 0) this.deps.logger.info('deleted media of ended sessions', { op: 'sessions', media: n });
+    return n;
+  }
+
+  /** Stops accepting uploads and cancels every running job. Child processes are terminated by the caller. */
+  shutdown(): void {
+    this.closed = true;
+    this.deps.extraction?.cancelAll?.();
+    this.deps.textAnalysis?.cancelAll?.();
+    this.deps.visualAnalysis?.cancelAll?.();
   }
 
   /** Removes expired records and their files, then any orphaned files older than the retention window. */
@@ -236,6 +287,10 @@ export class MediaService {
       ({ removed: orphans } = await this.deps.storage.cleanup({ olderThanMs: this.deps.limits.retentionMs }));
     } catch (e) {
       this.deps.logger.error('orphan cleanup failed', { op: 'sweep', reason: errorName(e) });
+    }
+    // Accounting with no record behind it (a crash, or a delete that had to be retried): finish the delete, then release.
+    for (const id of this.deps.quota.ids()) {
+      if (!this.deps.repository.get(id)) await this.safeDelete(id);
     }
     if (expired.length || orphans) this.deps.logger.info('sweep', { op: 'sweep', expired: expired.length, orphans });
     return { expired: expired.length, orphans };
@@ -320,6 +375,7 @@ export class MediaService {
   private async safeDelete(id: string): Promise<void> {
     try {
       await this.deps.storage.delete(id);
+      this.deps.quota.release(id);
     } catch (e) {
       this.deps.logger.error('delete failed; will retry on sweep', { op: 'delete', mediaId: id, reason: errorName(e) });
     }

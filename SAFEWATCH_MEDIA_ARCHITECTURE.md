@@ -301,7 +301,9 @@ Within a job FFmpeg processes run **one at a time**; the default of one concurre
 
 Future analysis code receives these values and reads artifact bytes through the storage port. It never needs FFmpeg commands, FFprobe JSON, subprocess objects or file paths. **No AI model is implemented in Checkpoint 3.**
 
-## 25. Security status (unchanged gate)
+## 25. Security status (superseded by §32 in Checkpoint 10; kept for history)
+
+> Checkpoint 10 added a macOS-only OS sandbox, sessions, quotas and rate limits: see §32. The paragraph below describes the state at Checkpoint 3.
 
 All Checkpoint 2 controls apply to every extraction command (argv arrays, `shell: false`, minimal environment, closed stdin, `-protocol_whitelist file`, forced demuxer, timeouts, output caps, server-generated output names inside the job's directory with a path-escape guard, partial output removed on failure). Subtitle text and stream metadata are untrusted: sanitised, never logged, never interpreted as HTML. **FFmpeg isolation is still NOT COMPLETED** and remains a production security gate: there is still no OS sandbox, separate user, or memory/CPU cgroup. Measured example: decoding a 4K source made an FFmpeg child reach about 307 MB RSS with nothing limiting it.
 
@@ -659,3 +661,95 @@ Adds no detection, category or server behaviour. It makes the existing flagged-t
 ### 31.5 Limits
 
 Warnings are as accurate as the CP8 intervals (not sample accurate); timers are scheduled at the real boundary but rendering depends on the browser; a hidden tab is re-evaluated on return; only flagged terms; no overall score; no safety verdict. **Unchanged production gates (NOT solved):** authentication / media-id access control, rate limiting, disk quotas, FFmpeg/helper sandboxing, lifecycle cleanup.
+
+## 32. Security and production readiness (Checkpoint 10)
+
+**Scope and verdict.** Checkpoint 10 hardens SafeWatch for ONE deployment: a single person on one macOS machine, API bound to loopback, SPA and API reached through the same browser. It is **not** a general production-ready release. Every control below is labelled **[T]** implemented and tested, **[P]** implemented but incompletely tested, **[N]** not implemented, **[G]** release gate / deployment dependent.
+
+### 32.1 Trust boundaries and assets
+
+```
+ other web pages ──X──┐
+ other local users ───┤   Browser (SPA, HttpOnly session cookie) ──► SafeWatch API (127.0.0.1) ──► storage dir (0700)
+ other local procs ───┘                                                    │ queues
+                                                                           ▼
+                                                      FFmpeg · FFprobe · whisper.cpp · Vision helper  (child processes, untrusted media)
+```
+
+Assets: uploaded media and everything derived from it (audio, frames, transcripts, phrases the user searches for); disk space; CPU; the user's browser session. Untrusted: every byte of every uploaded file (and therefore all subtitle/stream metadata), every request header, other origins and other local processes. Trusted: the server code, its configuration, the binaries it is told to run.
+
+### 32.2 Audit findings (before this checkpoint)
+
+| # | Severity | Finding (evidence = code read before the change) | Status |
+| --- | --- | --- | --- |
+| F1 | High | No authentication or ownership. A media id (UUID v4) was the only secret; `MediaService.get/delete/...` took only an id. Anyone who learned an id (log, URL, another local process) could read transcripts and frames or delete the media. | Fixed [T] |
+| F2 | High | No `Host` validation: DNS rebinding would give a hostile page same-origin access to the loopback API (upload, resource exhaustion). Code-confirmed; not exploited in practice. | Fixed [T] |
+| F3 | Medium | No rate limits: only a concurrent-upload cap. | Fixed [T] |
+| F4 | Medium | No disk budget beyond a per-file cap; retention (60 min) was the only bound. | Fixed [T] (see 32.6 for what is not covered) |
+| F5 | Medium | Process control: abort killed only the direct child with SIGKILL and did not wait for it (cleanup could race a still-writing tool); descendants and, at shutdown, running tools survived (orphans). | Fixed [T] |
+| F6 | Medium | No OS isolation of FFmpeg/FFprobe/whisper/Vision (already documented as a gate in CP2/CP3). | Mitigated on macOS only [T]; open elsewhere [G] |
+| F7 | Low | Storage followed symlinks on read (defence in depth; needs write access to a 0700 directory). | Fixed [T] |
+| F8 | Low | Query parsing was lenient (`words=maybe` meant true; unknown parameters ignored). | Fixed [T] |
+| F9 | Low | `SAFEWATCH_HOST=0.0.0.0` silently exposed an API with no accounts. | Fixed [T] (explicit opt-in + host list) |
+| F10 | Low | Relative tool/model paths resolved against the working directory. | Fixed [T] |
+| F11 | Info (privacy) | `index.html` loads Google Fonts from `fonts.googleapis.com` (since CP0A): a third-party request on every page load that discloses the visitor's IP and user agent to Google. CP9 documentation wrongly said there were no third-party requests. | **Open** [G]; documentation corrected; fix = self-host Inter (needs a font file; awaiting approval) |
+| F12 | Info | No Content-Security-Policy or other security headers for the SPA (the API does not serve the SPA). | Open [N] |
+| F13 | Info | Dev dependency advisory: vite 8.3.0-8.3.2 (dev server; high). `npm audit --omit=dev`: 0. | Fixed by lockfile bump to 8.3.5 [T: build and tests re-run] |
+| Not findings | | Shell injection (argv arrays, `shell:false`), path traversal through ids (strict UUID + artifact allow-list), logging of phrases/filenames, internal-error leakage: inspected and confirmed already safe; tests added. | |
+
+### 32.3 Authentication and ownership [T]
+
+- **Model:** anonymous per-browser sessions, no accounts, no passwords. The first successful upload from a browser starts a session: 32 random bytes (`crypto.randomBytes`), sent once as `sw_session` in a cookie `HttpOnly; SameSite=Strict; Path=/api; Max-Age=<ttl>` (+`Secure` when `SAFEWATCH_COOKIE_SECURE=true`). The server stores only the SHA-256 digest (the *owner id*); the owner id is kept on each `MediaRecord` and never serialised. Sessions expire after `SAFEWATCH_SESSION_TTL_MINUTES` idle (default 24 h, refreshed by use), are lost on restart (as is all media) and are capped at `SAFEWATCH_MAX_SESSIONS` (least recently used dropped first).
+- **Enforcement:** every route that touches media goes through `MediaService.owned(id, ownerId)`: a missing record, a malformed id and another session's record are indistinguishable (`404 NOT_FOUND`, same body). No session or an unknown/expired one is `401 UNAUTHENTICATED` for every id. `DELETE` of something not yours is a silent no-op (204) that changes nothing. `GET /api/health` is the only public route.
+- **What this is not:** it separates browser profiles on one machine. It does not identify people, there is no logout, and clearing cookies loses access to your own media (it still expires on schedule). Two tabs of one browser share a session.
+- **Session churn (audited):** an idle session is dropped when more than `maxSessions` newer ones are created, so an attacker able to create sessions can invalidate an idle user (401). Mitigations: LRU (active sessions survive, tested), uploads/session creation limited per address (default 10/min), and media of a dropped or expired session is deleted immediately so it neither lingers nor holds quota (tested). Residual: on a shared address (reverse proxy) the limit is pooled.
+
+### 32.4 Browser-origin protections [T]
+
+`checkHost`: the `Host` header must match `SAFEWATCH_ALLOWED_HOSTS` (default `localhost`, `127.0.0.1`, `[::1]`, any port; `name:port` entries match exactly). `checkOrigin`: a request with an `Origin` that is neither allow-listed (`SAFEWATCH_ALLOWED_ORIGINS`) nor equal to the request's own host, or with `Sec-Fetch-Site: cross-site`, is refused (403) before any session or body handling, for every method. CORS never uses `*`; `Access-Control-Allow-Credentials: true` only for exact allow-listed origins. CSRF: `SameSite=Strict` plus the Origin check plus custom headers/JSON content types that force a preflight. JSON endpoints require `application/json`. Responses are `no-store` + `nosniff`. Supported topology: SPA and API on the same site (the Vite proxy in development; one origin in production). Cross-*site* deployments are unsupported (Strict cookies would not be sent).
+
+### 32.5 Rate limits [T]
+
+Fixed-window, per minute, keyed by session (or by remote address before a session exists): uploads 10, analysis (`POST …/safety-findings`) 60, media reads 3000, everything else 300. State is a bounded LRU map (`SAFEWATCH_RATE_MAX_KEYS`, default 10 000). Over the limit: `429 RATE_LIMITED` with `Retry-After`; the body of a rejected POST is never read. In memory: resets on restart, per process, address-based keys are pooled behind a proxy (no `X-Forwarded-For` trust is implemented). Concurrency limits (uploads 4, processing/extraction/speech/vision queues) from earlier checkpoints still apply.
+
+### 32.6 Disk quota [T, with stated gaps]
+
+`StorageQuota` (synchronous, so concurrent uploads cannot oversell): total 10 GB, per session 4 GB, 5 media per session, 512 MB of the volume left free (all configurable; the session budget must be at least the upload limit). An upload reserves its declared length (or the full upload limit when none is declared) *before* a byte is written; the declared length becomes the hard stream limit, so a lying client is cut off. After the write the charge is settled to the real size. Extraction reserves the worst case of its derived files (from the actual audio tracks and planned frames) after probing and settles to the real output; failure returns it. Delete, expiry, failure, cancel and shutdown release; the sweep also finishes and releases accounting that no record backs any more. **Not covered by the quota:** whisper.cpp's temporary JSON (in the OS temp directory, removed in `finally` and by a startup sweep, bounded by the 3600 s audio-duration limit and a 64 MB read cap; the cap is checked after it is written), the in-memory manifests and transcripts, and anything another program writes to the volume. Crash recovery: the in-memory quota and records die with the process and the next start purges the whole storage directory.
+
+### 32.7 Filesystem and uploads [T]
+
+Storage names are server-generated UUIDs with a fixed suffix; ids are validated against a strict pattern before any path is built; artifacts come from a two-folder allow-list; client file names are display text (sanitised, never part of a path, never logged). Files are created with `wx` (exclusive) and mode 0600 in a 0700 directory carrying a marker file; the server refuses to adopt a directory it did not create. Reads reject symlinks (`lstat`, `O_NOFOLLOW`); the extraction directory must be a real directory; purge/cleanup only match owned names and remove links as links. Uploads are streamed to `.part`, renamed when complete, and removed on oversize, truncation, disconnect, abort or sniff failure (tested with raw sockets). The container is decided by the bytes, not the extension or the declared type.
+
+### 32.8 Child processes [T] and the sandbox
+
+All tools run through one function: argv arrays, `shell:false`, minimal environment (`PATH` only), neutral working directory, absolute tool/model paths, closed stdin, capped stdout, `-protocol_whitelist file` and a forced demuxer for every FFmpeg/FFprobe input. Each child is its own process group; abort, timeout, output overflow and shutdown send SIGTERM to the group and SIGKILL after a grace period, and the call settles only after the process has exited (so its output can be deleted safely). A registry lets shutdown stop everything.
+
+**macOS Seatbelt (`sandbox-exec`), enforced and tested with real tools:** deny all network, deny creating processes, deny every file write except the tool's own work directory (and, for whisper.cpp only, `<user cache>/com.apple.metal` so GPU kernels stay cached: without it a transcription took 14.5 s instead of 0.3 s). Verified: network connect fails, writes outside the directory fail (also through a symlink inside it), `fork` fails, FFmpeg refused an output path outside its directory, and real FFprobe, FFmpeg, whisper.cpp and the Vision helper all work inside the sandbox. `SAFEWATCH_SANDBOX=auto` probes for real; production requires it (`SAFEWATCH_REQUIRE_SANDBOX`). **Not enforced by the sandbox:** reads are unrestricted (the tools can read anything the user can), there are no CPU or memory limits, `sandbox-exec` is deprecated by Apple, and the profile was not reviewed by an independent party. **Linux and Windows: no sandbox exists** (production refuses to start there unless the requirement is explicitly turned off). Tool hangs are bounded by timeouts only.
+
+### 32.9 Lifecycle [T]
+
+Media: `uploaded → processing → ready | failed` (illegal transitions throw); a failed job always deletes its files and releases quota. Scheduling an already scheduled job is a no-op. Shutdown (SIGINT/SIGTERM): stop accepting, refuse new uploads, cancel running jobs, stop child processes, purge the storage directory, exit 0; a watchdog forces exit if cleanup stalls. Tested with the real entry point: SIGTERM during FFmpeg extraction, during an upload, when idle, twice in a row, and restart on the same directory. A SIGKILL/crash cannot run cleanup: tools started by a killed server may continue until they finish (`process.on('exit')` kills them on a normal exit only), and the next start purges the directory. `unhandledRejection` is logged by name only.
+
+### 32.10 Validation, errors, logging [T]
+
+Strict body schema (unknown fields, prototype keys, duplicates, oversize rejected), strict query parameters (`true`/`false` only, unknown keys refused), fixed error messages, generic 500s. Logs carry request id, masked route, status, durations and error *names*; never phrases, file names, cookies, media ids in paths or tool output (tested).
+
+### 32.11 Configuration [T]
+
+Loopback by default. A non-loopback `SAFEWATCH_HOST` needs `SAFEWATCH_ALLOW_NETWORK_BIND=true` **and** `SAFEWATCH_ALLOWED_HOSTS`. Production needs an explicit `SAFEWATCH_STORAGE_DIR` and a sandbox. Bad configuration prints one line and exits 1. `.env.example` holds placeholders only. Data is stored **unencrypted** (mode 0600 in a 0700 directory) for at most the retention time.
+
+### 32.12 Release gates (what is NOT done)
+
+| Item | State |
+| --- | --- |
+| Sandbox for Linux / Windows; read restrictions; CPU/memory limits for children | [N] gate |
+| TLS / HTTPS and a verified `Secure` cookie deployment (only the attribute is unit tested) | [N]/[G] |
+| Real user accounts, multi-user isolation, logout | [N] |
+| Encryption at rest | [N] |
+| Shared / distributed rate limiting, proxy-aware client addresses | [N] |
+| Content-Security-Policy and security headers for the SPA | [N] |
+| Third-party Google Fonts request (F11) | [G] open |
+| Quota coverage of whisper's temp JSON | [N] |
+| Independent security review, fuzzing of the media parsers, penetration test | [N] |
+| Cross-site deployment (SPA and API on different sites) | unsupported |
+| Behaviour after a hard crash leaves orphan tools until they finish | [P] documented, not fixable in-process |

@@ -90,7 +90,7 @@ export class FfmpegMediaExtractor implements MediaExtractor {
     ];
     try {
       ctx.stats.processes += 1;
-      const result = await this.run(this.paths.ffmpegPath, args, ctx.signal);
+      const result = await this.run(this.paths.ffmpegPath, args, ctx.signal, undefined, undefined, ctx.workspace.dir);
       if (result.exitCode !== 0) throw new ExtractionError('extraction-failed');
       const { size } = await stat(out).catch(() => ({ size: 0 }));
       if (size > max) throw new ExtractionError('limit-exceeded');
@@ -134,7 +134,7 @@ export class FfmpegMediaExtractor implements MediaExtractor {
     ];
     try {
       ctx.stats.processes += 1;
-      const result = await this.run(this.paths.ffmpegPath, args, ctx.signal, undefined, SINGLE_STEP_TIMEOUT_MS);
+      const result = await this.run(this.paths.ffmpegPath, args, ctx.signal, undefined, SINGLE_STEP_TIMEOUT_MS, ctx.workspace.dir);
       const info = await stat(out).catch(() => null);
       if (result.exitCode !== 0 || !info || info.size === 0) { await rm(out, { force: true }); return null; }
       const dims = await readHeader(out);
@@ -146,10 +146,10 @@ export class FfmpegMediaExtractor implements MediaExtractor {
     }
   }
 
-  private async run(binary: string, args: string[], signal: AbortSignal, maxStdoutBytes?: number, stepTimeoutMs?: number) {
+  private async run(binary: string, args: string[], signal: AbortSignal, maxStdoutBytes?: number, stepTimeoutMs?: number, writeDir?: string) {
     const combined = stepTimeoutMs ? AbortSignal.any([signal, AbortSignal.timeout(stepTimeoutMs)]) : signal;
     try {
-      return await runBinary(binary, args, { signal: combined, maxStdoutBytes });
+      return await runBinary(binary, args, { signal: combined, maxStdoutBytes, sandbox: { writeDirs: writeDir ? [writeDir] : [] } });
     } catch (e) {
       if (e instanceof ProcessError && e.kind === 'aborted') throw new ExtractionError('timeout');
       if (e instanceof ProcessError && e.kind === 'output-too-large') throw e;

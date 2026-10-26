@@ -72,6 +72,10 @@ export class TextAnalysisService {
     job.controller.abort('cancelled');
   }
 
+  cancelAll(): void {
+    for (const id of [...this.running.keys()]) this.cancel(id);
+  }
+
   private update(mediaId: string, change: (r: NonNullable<ReturnType<MediaRepository['get']>>) => NonNullable<ReturnType<MediaRepository['get']>>) {
     const record = this.deps.repository.get(mediaId);
     if (!record) throw new SpeechError('cancelled');

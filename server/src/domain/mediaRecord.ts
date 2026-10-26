@@ -8,6 +8,8 @@ import type { MediaErrorCode } from '@/domain/media/errors';
 
 /** Server-side aggregate: the media asset plus separate extraction and analysis state, and expiry. */
 export interface MediaRecord {
+  /** SHA-256 of the owning session's secret. Server-derived; never serialised into a resource. */
+  ownerId: string;
   asset: MediaAsset;
   extraction: MediaExtraction;
   text: TextAnalysis;
@@ -38,7 +40,8 @@ function move(record: MediaRecord, to: MediaAssetStatus, patch: Partial<MediaAss
   return { ...record, asset: { ...record.asset, ...patch, status: to } };
 }
 
-export const createUploadedRecord = (asset: MediaAsset, now: number, retentionMs: number): MediaRecord => ({
+export const createUploadedRecord = (asset: MediaAsset, ownerId: string, now: number, retentionMs: number): MediaRecord => ({
+  ownerId,
   asset: { ...asset, status: 'uploaded' },
   extraction: createExtraction(asset.id, new Date(now).toISOString()),
   text: createTextAnalysis(asset.id, new Date(now).toISOString()),

@@ -96,6 +96,7 @@ describe.skipIf(!hasFfmpeg)('extraction end-to-end (real FFmpeg)', () => {
 describe('GET /api/media/:id/extraction', () => {
   it('returns 404 for unknown and malformed ids', async () => {
     app = await startTestApp({ extraction: {} });
+    app.login();
     for (const id of ['00000000-0000-4000-8000-000000000000', 'nope', '..%2F..%2Fetc']) {
       const res = await fetch(`${app.url}/api/media/${id}/extraction`);
       expect(res.status).toBe(404);

@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import { DEFAULT_CONTEXT_CONFIG, type ContextConfig } from '@/domain/context/contextEvent';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 /** Everything that bounds extraction work. See SAFEWATCH_MEDIA_ARCHITECTURE.md for the reasoning behind the defaults. */
 export interface ExtractionConfig {
@@ -84,6 +84,40 @@ export interface ServerConfig {
   /** Temporal correlation settings (see src/domain/context/contextEvent.ts for the reasoning behind the defaults). */
   context: ContextConfig;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
+  security: SecurityConfig;
+  rate: RateConfig;
+  quota: QuotaConfig;
+  sandbox: 'auto' | 'seatbelt' | 'none';
+  /** Startup fails if the OS sandbox is requested/required and cannot be applied. */
+  requireSandbox: boolean;
+  /** How long shutdown waits for child processes after asking them to stop. */
+  shutdownGraceMs: number;
+}
+
+export interface SecurityConfig {
+  /** Host header values (name or name:port) the API answers to. Anything else is refused (DNS-rebinding defence). */
+  allowedHosts: string[];
+  /** Adds the Secure attribute to the session cookie. Required behind HTTPS; browsers reject Secure cookies on plain http (except localhost in some). */
+  cookieSecure: boolean;
+  sessionTtlMs: number;
+  maxSessions: number;
+}
+
+export interface RateConfig {
+  uploadsPerMinute: number;
+  analysisPerMinute: number;
+  readsPerMinute: number;
+  otherPerMinute: number;
+  /** Upper bound on distinct limiter keys held in memory (oldest evicted). */
+  maxKeys: number;
+}
+
+export interface QuotaConfig {
+  totalBytes: number;
+  perSessionBytes: number;
+  maxMediaPerSession: number;
+  /** Free space that must remain on the storage volume after an upload is accepted. */
+  minFreeDiskBytes: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -119,13 +153,14 @@ function origins(env: Env): string[] {
 
 function speech(env: Env): SpeechConfig {
   const provider = oneOf(env, 'SAFEWATCH_SPEECH_PROVIDER', ['none', 'whispercpp'] as const, 'none');
-  const modelPath = env.SAFEWATCH_SPEECH_MODEL_PATH?.trim() || null;
+  const modelRaw = env.SAFEWATCH_SPEECH_MODEL_PATH?.trim() || null;
+  const modelPath = modelRaw ? resolve(modelRaw) : null;
   if (provider === 'whispercpp' && !modelPath) throw new Error('SAFEWATCH_SPEECH_MODEL_PATH is required when SAFEWATCH_SPEECH_PROVIDER=whispercpp.');
   const language = (env.SAFEWATCH_SPEECH_LANGUAGE?.trim() || 'auto').toLowerCase();
   if (language !== 'auto' && !/^[a-z]{2,3}$/.test(language)) throw new Error(`Invalid SAFEWATCH_SPEECH_LANGUAGE "${language}": expected "auto" or a language code such as "en" or "hi".`);
   return {
     provider,
-    binaryPath: env.SAFEWATCH_SPEECH_BINARY?.trim() || 'whisper-cli',
+    binaryPath: absIfPath(env.SAFEWATCH_SPEECH_BINARY?.trim() || 'whisper-cli'),
     modelPath,
     modelName: modelPath ? (modelPath.split(/[\\/]/).pop() ?? '').replace(/\.bin$/, '') || 'model' : 'none',
     language,
@@ -144,7 +179,7 @@ function vision(env: Env): VisionConfig {
   if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) throw new Error(`Invalid SAFEWATCH_VISION_MIN_CONFIDENCE "${env.SAFEWATCH_VISION_MIN_CONFIDENCE}": expected a number between 0 and 1.`);
   return {
     provider: oneOf(env, 'SAFEWATCH_VISION_PROVIDER', ['none', 'apple-vision'] as const, 'none'),
-    binaryPath: env.SAFEWATCH_VISION_BINARY?.trim() || 'bin/safewatch-vision',
+    binaryPath: absIfPath(env.SAFEWATCH_VISION_BINARY?.trim() || 'bin/safewatch-vision'),
     timeoutMs: int(env, 'SAFEWATCH_VISION_TIMEOUT_MS', 2 * 60_000, 1000, 60 * 60_000),
     maxFrames: int(env, 'SAFEWATCH_VISION_MAX_FRAMES', 300, 1, 2000),
     batchSize: int(env, 'SAFEWATCH_VISION_BATCH_SIZE', 8, 1, 32),
@@ -157,15 +192,70 @@ function vision(env: Env): VisionConfig {
   };
 }
 
+const isLoopback = (h: string) => h === '127.0.0.1' || h === '::1' || h === 'localhost' || h.startsWith('127.');
+
+/** A command name such as `ffmpeg` is looked up on PATH; anything with a separator is made absolute so a changed working directory cannot redirect it. */
+const absIfPath = (p: string): string => (p.includes('/') || p.includes('\\') ? resolve(p) : p);
+
+function hosts(env: Env, host: string, port: number): string[] {
+  const raw = env.SAFEWATCH_ALLOWED_HOSTS?.trim();
+  const list = raw ? raw.split(',').map((h) => h.trim().toLowerCase()).filter(Boolean) : [];
+  for (const h of list) if (!/^[a-z0-9.-]+(:\d{1,5})?$|^\[[0-9a-f:]+\](:\d{1,5})?$/.test(h)) throw new Error(`Invalid SAFEWATCH_ALLOWED_HOSTS entry "${h}": expected host or host:port.`);
+  if (list.length > 0) return list;
+  // Default: the loopback names a browser can legitimately use, on any port (the dev proxy keeps the browser's Host).
+  void host; void port;
+  return ['localhost', '127.0.0.1', '[::1]'];
+}
+
 /** Parses and validates server configuration. Throws on invalid values so misconfiguration fails at startup. */
 export function parseServerConfig(env: Env): ServerConfig {
   const MIN = 60_000;
+  const MB = 1024 * 1024;
+  const environment = oneOf(env, 'NODE_ENV', ['development', 'production', 'test'] as const, 'development');
+  const host = env.SAFEWATCH_HOST?.trim() || '127.0.0.1';
+  const port = int(env, 'SAFEWATCH_PORT', 8787, 0, 65535);
+  if (!isLoopback(host)) {
+    // Network exposure is a deliberate decision: it needs an explicit opt-in and an explicit list of host names.
+    if (env.SAFEWATCH_ALLOW_NETWORK_BIND?.trim() !== 'true') throw new Error(`SAFEWATCH_HOST "${host}" is not a loopback address. Binding beyond this machine requires SAFEWATCH_ALLOW_NETWORK_BIND=true and SAFEWATCH_ALLOWED_HOSTS (and SafeWatch has no multi-user accounts: see the security documentation).`);
+    if (!env.SAFEWATCH_ALLOWED_HOSTS?.trim()) throw new Error('SAFEWATCH_ALLOWED_HOSTS is required when SAFEWATCH_HOST is not a loopback address.');
+  }
+  if (environment === 'production' && !env.SAFEWATCH_STORAGE_DIR?.trim()) throw new Error('SAFEWATCH_STORAGE_DIR is required in production (a dedicated directory, not the shared temp directory).');
+  const sandbox = oneOf(env, 'SAFEWATCH_SANDBOX', ['auto', 'seatbelt', 'none'] as const, 'auto');
+  const requireSandbox = (env.SAFEWATCH_REQUIRE_SANDBOX?.trim() ?? (environment === 'production' ? 'true' : 'false')) === 'true';
+  if (requireSandbox && sandbox === 'none') throw new Error('SAFEWATCH_REQUIRE_SANDBOX=true conflicts with SAFEWATCH_SANDBOX=none.');
+  const maxUploadBytes = int(env, 'SAFEWATCH_MAX_UPLOAD_MB', 2048, 1, 8192) * MB;
+  const perSessionBytes = int(env, 'SAFEWATCH_QUOTA_SESSION_MB', 4096, 1, 1_048_576) * MB;
+  const totalBytes = int(env, 'SAFEWATCH_QUOTA_TOTAL_MB', 10_240, 1, 10_485_760) * MB;
+  if (perSessionBytes < maxUploadBytes) throw new Error('SAFEWATCH_QUOTA_SESSION_MB must be at least SAFEWATCH_MAX_UPLOAD_MB, or the largest allowed upload could never be accepted.');
+  if (totalBytes < perSessionBytes) throw new Error('SAFEWATCH_QUOTA_TOTAL_MB must be at least SAFEWATCH_QUOTA_SESSION_MB.');
   return {
-    environment: oneOf(env, 'NODE_ENV', ['development', 'production', 'test'] as const, 'development'),
-    host: env.SAFEWATCH_HOST?.trim() || '127.0.0.1',
-    port: int(env, 'SAFEWATCH_PORT', 8787, 0, 65535),
-    storageDir: env.SAFEWATCH_STORAGE_DIR?.trim() || join(tmpdir(), 'safewatch-media'),
-    maxUploadBytes: int(env, 'SAFEWATCH_MAX_UPLOAD_MB', 2048, 1, 8192) * 1024 * 1024,
+    environment,
+    host,
+    port,
+    storageDir: resolve(env.SAFEWATCH_STORAGE_DIR?.trim() || join(tmpdir(), 'safewatch-media')),
+    security: {
+      allowedHosts: hosts(env, host, port),
+      cookieSecure: (env.SAFEWATCH_COOKIE_SECURE?.trim() ?? 'false') === 'true',
+      sessionTtlMs: int(env, 'SAFEWATCH_SESSION_TTL_MINUTES', 24 * 60, 1, 30 * 24 * 60) * MIN,
+      maxSessions: int(env, 'SAFEWATCH_MAX_SESSIONS', 200, 1, 100_000),
+    },
+    rate: {
+      uploadsPerMinute: int(env, 'SAFEWATCH_RATE_UPLOADS_PER_MINUTE', 10, 1, 10_000),
+      analysisPerMinute: int(env, 'SAFEWATCH_RATE_ANALYSIS_PER_MINUTE', 60, 1, 100_000),
+      readsPerMinute: int(env, 'SAFEWATCH_RATE_READS_PER_MINUTE', 3000, 1, 1_000_000),
+      otherPerMinute: int(env, 'SAFEWATCH_RATE_OTHER_PER_MINUTE', 300, 1, 1_000_000),
+      maxKeys: int(env, 'SAFEWATCH_RATE_MAX_KEYS', 10_000, 10, 1_000_000),
+    },
+    quota: {
+      totalBytes,
+      perSessionBytes,
+      maxMediaPerSession: int(env, 'SAFEWATCH_MAX_MEDIA_PER_SESSION', 5, 1, 1000),
+      minFreeDiskBytes: int(env, 'SAFEWATCH_MIN_FREE_DISK_MB', 512, 0, 10_485_760) * MB,
+    },
+    sandbox,
+    requireSandbox,
+    shutdownGraceMs: int(env, 'SAFEWATCH_SHUTDOWN_GRACE_MS', 5000, 100, 120_000),
+    maxUploadBytes,
     allowedOrigins: origins(env),
     uploadTimeoutMs: int(env, 'SAFEWATCH_UPLOAD_TIMEOUT_MS', 30 * MIN, 1000, 6 * 60 * MIN),
     processingTimeoutMs: int(env, 'SAFEWATCH_PROCESSING_TIMEOUT_MS', MIN, 1000, 60 * MIN),
@@ -198,8 +288,8 @@ export function parseServerConfig(env: Env): ServerConfig {
       maxContextMs: int(env, 'SAFEWATCH_CONTEXT_MAX_MS', DEFAULT_CONTEXT_CONFIG.maxContextMs, 1000, 600_000),
       maxVisualCoverageMs: int(env, 'SAFEWATCH_CONTEXT_MAX_VISUAL_COVERAGE_MS', DEFAULT_CONTEXT_CONFIG.maxVisualCoverageMs, 0, 60_000),
     },
-    ffmpegPath: env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg',
-    ffprobePath: env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe',
+    ffmpegPath: absIfPath(env.SAFEWATCH_FFMPEG_PATH?.trim() || 'ffmpeg'),
+    ffprobePath: absIfPath(env.SAFEWATCH_FFPROBE_PATH?.trim() || 'ffprobe'),
     logLevel: oneOf(env, 'SAFEWATCH_LOG_LEVEL', ['debug', 'info', 'warn', 'error', 'silent'] as const, 'info'),
   };
 }

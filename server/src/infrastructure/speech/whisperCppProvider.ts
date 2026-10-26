@@ -154,7 +154,7 @@ export class WhisperCppProvider implements SpeechToTextProvider {
     this.available ??= (async () => {
       try {
         await access(this.options.modelPath);
-        return (await runBinary(this.options.binaryPath, ['--help'], { maxStdoutBytes: 256 * 1024 })).exitCode === 0;
+        return (await runBinary(this.options.binaryPath, ['--help'], { maxStdoutBytes: 256 * 1024, sandbox: { gpuShaderCache: true } })).exitCode === 0;
       } catch {
         return false;
       }
@@ -177,7 +177,7 @@ export class WhisperCppProvider implements SpeechToTextProvider {
       ];
       let result;
       try {
-        result = await runBinary(this.options.binaryPath, args, { signal: request.signal, maxStdoutBytes: 1024 * 1024 });
+        result = await runBinary(this.options.binaryPath, args, { signal: request.signal, maxStdoutBytes: 1024 * 1024, sandbox: { writeDirs: [dir], gpuShaderCache: true } });
       } catch (e) {
         if (e instanceof ProcessError && e.kind === 'aborted') throw abortError(request.signal);
         throw new SpeechError('provider-failed');

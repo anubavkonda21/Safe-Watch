@@ -27,6 +27,13 @@ import { ProcessingQueue } from '../src/application/processingQueue';
 import { FfmpegMediaProcessor } from '../src/infrastructure/ffmpeg/ffmpegMediaProcessor';
 import { InMemoryMediaRepository } from '../src/infrastructure/inMemoryMediaRepository';
 import { LocalDiskMediaStorage } from '../src/infrastructure/storage/localDiskMediaStorage';
+import { installCookieJar, setCookie, testSecurity } from './security';
+import type { StorageQuota } from '../src/application/storageQuota';
+import type { SessionStore } from '../src/api/sessions';
+import type { QuotaLimits } from '../src/application/storageQuota';
+import type { RateConfig, SecurityConfig } from '../src/config';
+
+installCookieJar();
 
 export const fixture = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 export const tools = await FfmpegMediaProcessor.checkTools({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' });
@@ -47,7 +54,13 @@ export interface TestApp {
   visualAnalysis?: VisualAnalysisService;
   repository: InMemoryMediaRepository;
   storage: LocalDiskMediaStorage;
+  quota: StorageQuota;
+  sessions: SessionStore;
   clock: { now: number };
+  /** Creates a session directly and makes the shared cookie jar use it for this app. Returns the cookie and owner id. */
+  login(): { cookie: string; ownerId: string };
+  /** Creates another, independent session WITHOUT touching the jar: use `cookie` explicitly to act as a second browser. */
+  newSession(): { cookie: string; ownerId: string };
   files(): Promise<string[]>;
   close(): Promise<void>;
 }
@@ -61,6 +74,11 @@ export interface TestAppOptions {
   maxConcurrentUploads?: number;
   retentionMs?: number;
   allowedOrigins?: string[];
+  quota?: Partial<QuotaLimits>;
+  rate?: Partial<RateConfig>;
+  security?: Partial<SecurityConfig>;
+  maxSessions?: number;
+  minFreeDiskBytes?: number;
   toolsStatus?: { ffmpeg: boolean; ffprobe: boolean };
   /** Enables extraction after media is ready. Omit to test media handling alone. */
   extraction?: { extractor?: MediaExtractor; limits?: Partial<ExtractionLimits>; maxConcurrent?: number; maxQueued?: number };
@@ -107,11 +125,13 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
   const storage = new LocalDiskMediaStorage(storageDir);
   const repository = new InMemoryMediaRepository();
   const clock = { now: Date.now() };
+  const sec = testSecurity({ quota: opts.quota, rate: opts.rate, security: opts.security, maxSessions: opts.maxSessions, now: () => clock.now });
   const limits = {
     maxUploadBytes: opts.maxUploadBytes ?? 50 * 1024 * 1024,
     maxConcurrentUploads: opts.maxConcurrentUploads ?? 4,
     processingTimeoutMs: opts.processingTimeoutMs ?? 10_000,
     retentionMs: opts.retentionMs ?? 60 * 60_000,
+    minFreeDiskBytes: opts.minFreeDiskBytes ?? 0,
   };
   const textAnalysis = opts.extraction && opts.speech
     ? new TextAnalysisService({
@@ -129,14 +149,14 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
     : undefined;
   const extraction = opts.extraction
     ? new MediaExtractionService({
-        storage, repository, logger, now: () => clock.now, onCompleted: (id, rid) => { textAnalysis?.schedule(id, rid); visualAnalysis?.schedule(id, rid); },
+        storage, repository, logger, quota: sec.quota, now: () => clock.now, onCompleted: (id, rid) => { textAnalysis?.schedule(id, rid); visualAnalysis?.schedule(id, rid); },
         extractor: opts.extraction.extractor ?? new FfmpegMediaExtractor({ ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' }),
         queue: new ProcessingQueue(opts.extraction.maxConcurrent ?? 1, opts.extraction.maxQueued ?? 10),
         limits: { ...defaultExtractionLimits(), ...opts.extraction.limits },
       })
     : undefined;
   const service = new MediaService({
-    storage, repository, logger, limits, extraction, textAnalysis, visualAnalysis, context: opts.context,
+    storage, repository, logger, limits, extraction, quota: sec.quota, textAnalysis, visualAnalysis, context: opts.context,
     processor: opts.processor ?? fakeProcessor(),
     queue: new ProcessingQueue(opts.maxConcurrentProcessing ?? 2, opts.maxQueuedProcessing ?? 10),
     now: () => clock.now,
@@ -144,12 +164,15 @@ export async function startTestApp(opts: TestAppOptions = {}): Promise<TestApp> 
   const server = createApiServer({
     mediaService: service, logger, limits: { uploadTimeoutMs: 30_000 },
     allowedOrigins: opts.allowedOrigins ?? ['http://localhost:5173'],
+    security: sec.security, rate: sec.rate, sessions: sec.sessions, now: () => clock.now,
     health: { version: '0.0.0-test', environment: 'test', tools: opts.toolsStatus ?? { ffmpeg: true, ffprobe: true }, speech: { provider: opts.speech?.provider ? 'test' : 'none', available: !!opts.speech?.provider }, vision: { provider: opts.vision?.provider ? 'test' : 'none', available: !!opts.vision?.provider } },
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   return {
-    url, storageDir, logs, service, extraction, textAnalysis, visualAnalysis, repository, storage, clock,
+    url, storageDir, logs, service, extraction, textAnalysis, visualAnalysis, repository, storage, quota: sec.quota, sessions: sec.sessions, clock,
+    newSession: () => { const c = sec.sessions.create(); return { cookie: `sw_session=${c.token}`, ownerId: c.ownerId }; },
+    login: () => { const c = sec.sessions.create(); const cookie = `sw_session=${c.token}`; setCookie(url, cookie); return { cookie, ownerId: c.ownerId }; },
     files: async () => (await readdir(storageDir)).filter((f) => f !== '.safewatch-storage'),
     close: async () => {
       server.closeAllConnections();

@@ -28,6 +28,9 @@ import { FfmpegMediaProcessor } from '../server/src/infrastructure/ffmpeg/ffmpeg
 import { InMemoryMediaRepository } from '../server/src/infrastructure/inMemoryMediaRepository';
 import { LocalDiskMediaStorage } from '../server/src/infrastructure/storage/localDiskMediaStorage';
 
+import { installCookieJar, testSecurity } from '../server/test/security';
+installCookieJar();
+const sec = testSecurity();
 const files = process.argv.slice(2);
 if (files.length === 0) { console.error('Usage: npm run check:extraction -- <video> [more...]'); process.exit(1); }
 
@@ -48,11 +51,11 @@ const extraction = new MediaExtractionService({
   storage, repository, logger, extractor: new FfmpegMediaExtractor(config), queue: new ProcessingQueue(ex.maxConcurrent, ex.maxQueued),
   limits: { timeoutMs: ex.timeoutMs, frame: ex.frame, maxFrameBytes: ex.maxFrameBytes, maxAudioBytes: ex.maxAudioBytes, maxAudioTracks: ex.maxAudioTracks, maxCues: ex.maxCues, maxSubtitleBytes: ex.maxSubtitleBytes },
 });
-const mediaService = new MediaService({
+const mediaService = new MediaService({ quota: sec.quota,
   storage, repository, logger, extraction, processor: new FfmpegMediaProcessor(config), queue: new ProcessingQueue(2, 10),
   limits: { ...config, processingTimeoutMs: 120_000 },
 });
-const server = createApiServer({ mediaService, logger, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false }, vision: { provider: 'none', available: false } } });
+const server = createApiServer({ mediaService, logger, security: sec.security, rate: sec.rate, sessions: sec.sessions, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false }, vision: { provider: 'none', available: false } } });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const port = (server.address() as AddressInfo).port;
 const mimeFor = (f: string) => ({ '.mp4': 'video/mp4', '.mkv': 'video/x-matroska', '.webm': 'video/webm' })[extname(f).toLowerCase()] ?? 'video/mp4';
@@ -118,7 +121,7 @@ for (const file of files) {
   const cues = manifest.subtitles.reduce((n, t) => n + t.cueCount, 0);
 
   const d0 = performance.now();
-  await mediaService.delete(id);
+  await mediaService.delete(id, repository.get(id)!.ownerId);
   const cleanupMs = performance.now() - d0;
   const leftover = (await readdir(storageDir)).filter((f) => f !== '.safewatch-storage');
 

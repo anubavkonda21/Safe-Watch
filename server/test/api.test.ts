@@ -127,11 +127,12 @@ describe('POST /api/media — rejection', () => {
       req.write(mp4().subarray(0, 100));
       setTimeout(() => { req.destroy(); resolve(); }, 100);
     });
-    await eventually(async () => (await app.files()).length === 0);
-    expect(app.logs.some((l) => l.msg === 'upload rejected' && l.code === 'UPLOAD_FAILED')).toBe(true);
+    await eventually(() => app.logs.some((l) => l.msg === 'upload rejected' && l.code === 'UPLOAD_FAILED'));
+    expect(await app.files()).toEqual([]);
   });
   it('unknown routes and methods return structured 404s', async () => {
     app = await startTestApp();
+    app.login();
     for (const [method, path] of [['GET', '/nope'], ['GET', '/api/media'], ['PUT', '/api/media/x'], ['POST', '/api/health']] as const) {
       const res = await fetch(`${app.url}${path}`, { method });
       expect(res.status).toBe(404);
@@ -207,6 +208,7 @@ describe('processing outcomes', () => {
   });
   it('an unexpected server fault returns a generic 500 with no internals', async () => {
     app = await startTestApp();
+    app.login();
     app.repository.get = () => { throw new Error(`boom at ${app.storageDir}/secret.js:42`); };
     const res = await fetch(`${app.url}/api/media/${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}`);
     expect(res.status).toBe(500);
@@ -219,6 +221,7 @@ describe('processing outcomes', () => {
 describe('GET/DELETE /api/media/:id', () => {
   it('returns 404 for unknown and malformed ids', async () => {
     app = await startTestApp();
+    app.login();
     for (const id of ['00000000-0000-4000-8000-000000000000', 'abc', '..%2F..%2Fetc%2Fpasswd']) {
       expect((await fetch(`${app.url}/api/media/${id}`)).status).toBe(404);
     }
@@ -243,7 +246,8 @@ describe('CORS', () => {
     expect(ok.headers.get('vary')).toContain('Origin');
     const other = await fetch(`${app.url}/api/health`, { headers: { origin: 'https://evil.example' } });
     expect(other.headers.get('access-control-allow-origin')).toBeNull();
-    expect(ok.headers.get('access-control-allow-credentials')).toBeNull();
+    expect(ok.headers.get('access-control-allow-credentials')).toBe('true'); // the session cookie, for this exact origin only
+    expect(other.headers.get('access-control-allow-credentials')).toBeNull();
   });
   it('answers preflight for allowed origins only', async () => {
     app = await startTestApp({ allowedOrigins: ['http://localhost:5173'] });

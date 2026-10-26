@@ -47,7 +47,7 @@ export class HttpMediaUploader implements MediaUploader {
     for (;;) {
       if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
       try {
-        const res = await fetch(`${this.options.baseUrl}${API_PATHS.extraction(mediaId)}`, { signal: hooks.signal });
+        const res = await fetch(`${this.options.baseUrl}${API_PATHS.extraction(mediaId)}`, { signal: hooks.signal, credentials: 'include' });
         const body = parse(await res.text());
         if (!res.ok || !isExtractionResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
         failures = 0;
@@ -73,14 +73,14 @@ export class HttpMediaUploader implements MediaUploader {
       if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
       try {
         // While waiting, ask for the slim form (no word timestamps); fetch the full one once it is final.
-        const res = await fetch(`${url}?words=false`, { signal: hooks.signal });
+        const res = await fetch(`${url}?words=false`, { signal: hooks.signal, credentials: 'include' });
         const body = parse(await res.text());
         if (!res.ok || !isTextAnalysisResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
         failures = 0;
         const t = body.textAnalysis;
         const key = `${t.status}|${t.phase}`;
         if (t.status === 'ready' || t.status === 'failed') {
-          const full = t.status === 'ready' ? await fetch(url, { signal: hooks.signal }).then(async (r) => parse(await r.text())) : body;
+          const full = t.status === 'ready' ? await fetch(url, { signal: hooks.signal, credentials: 'include' }).then(async (r) => parse(await r.text())) : body;
           const result = isTextAnalysisResponse(full) ? full.textAnalysis : t;
           hooks.onUpdate?.(result);
           return result;
@@ -104,7 +104,7 @@ export class HttpMediaUploader implements MediaUploader {
       if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
       try {
         // While waiting, ask for the slim form (no observations); fetch the full one once it is final.
-        const res = await fetch(`${url}?observations=false`, { signal: hooks.signal });
+        const res = await fetch(`${url}?observations=false`, { signal: hooks.signal, credentials: 'include' });
         const body = parse(await res.text());
         if (!res.ok || !isVisualResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
         failures = 0;
@@ -112,7 +112,7 @@ export class HttpMediaUploader implements MediaUploader {
         const p = v.progress;
         const key = `${v.status}|${v.phase}|${p ? `${p.framesDone}/${p.framesTotal}` : ''}`;
         if (v.status === 'ready' || v.status === 'failed') {
-          const full = v.status === 'ready' ? await fetch(url, { signal: hooks.signal }).then(async (r) => parse(await r.text())) : body;
+          const full = v.status === 'ready' ? await fetch(url, { signal: hooks.signal, credentials: 'include' }).then(async (r) => parse(await r.text())) : body;
           const result = isVisualResponse(full) ? full.visualAnalysis : v;
           hooks.onUpdate?.(result);
           return result;
@@ -133,7 +133,7 @@ export class HttpMediaUploader implements MediaUploader {
     for (;;) {
       if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
       try {
-        const res = await fetch(`${this.options.baseUrl}${API_PATHS.context(mediaId)}`, { signal: hooks.signal });
+        const res = await fetch(`${this.options.baseUrl}${API_PATHS.context(mediaId)}`, { signal: hooks.signal, credentials: 'include' });
         const body = parse(await res.text());
         if (!res.ok || !isContextResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
         failures = 0;
@@ -155,7 +155,7 @@ export class HttpMediaUploader implements MediaUploader {
       if (hooks.signal?.aborted) throw new MediaIngestionError('upload-failed');
       try {
         // Only words to look for are sent: never evidence, paths or settings.
-        const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ terms: terms.map((t) => ({ phrase: t.phrase, matchMode: t.matchMode })) }), signal: hooks.signal });
+        const res = await fetch(url, { method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ terms: terms.map((t) => ({ phrase: t.phrase, matchMode: t.matchMode })) }), signal: hooks.signal });
         const body = parse(await res.text());
         if (!res.ok || !isSafetyResponse(body)) throw new MediaIngestionError(errorCodeFrom(body, res.status));
         failures = 0;
@@ -171,7 +171,7 @@ export class HttpMediaUploader implements MediaUploader {
 
   async remove(mediaId: string): Promise<void> {
     try {
-      await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(mediaId)}`, { method: 'DELETE', keepalive: true });
+      await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(mediaId)}`, { method: 'DELETE', keepalive: true, credentials: 'include' });
     } catch {
       // Best effort: the server also deletes expired media by itself.
     }
@@ -182,6 +182,7 @@ export class HttpMediaUploader implements MediaUploader {
       const xhr = new XMLHttpRequest();
       let lastFraction = 0;
       xhr.open('POST', `${this.options.baseUrl}${API_PATHS.media}`);
+      xhr.withCredentials = true; // the session cookie (HttpOnly; the page never sees it)
       xhr.setRequestHeader(FILENAME_HEADER, encodeURIComponent(sanitizeFilename(file.name)));
       if (file.type) xhr.setRequestHeader('content-type', file.type);
 
@@ -216,7 +217,7 @@ export class HttpMediaUploader implements MediaUploader {
       if (Date.now() > deadline) throw new MediaIngestionError('timeout');
       await new Promise((r) => setTimeout(r, this.pollIntervalMs));
       try {
-        const res = await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(first.asset.id)}`, { signal });
+        const res = await fetch(`${this.options.baseUrl}${API_PATHS.media}/${encodeURIComponent(first.asset.id)}`, { signal, credentials: 'include' });
         const body = parse(await res.text());
         if (res.ok && isMediaResponse(body)) { current = body.media; failures = 0; continue; }
         throw new MediaIngestionError(errorCodeFrom(body, res.status));

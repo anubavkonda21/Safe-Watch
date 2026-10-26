@@ -150,6 +150,7 @@ describe('request validation', () => {
   });
   it.each(['nope', '00000000-0000-4000-8000-000000000000', '..%2F..%2Fetc%2Fpasswd', '%2e%2e', '%2Fetc%2Fpasswd'])('unknown or malformed id %s is 404 for GET and POST', async (badId) => {
     app = await startTestApp({ extraction: {} });
+    app.login();
     expect((await fetch(`${app.url}/api/media/${badId}/safety-findings`)).status).toBe(404);
     expect((await post(`/api/media/${badId}/safety-findings`, terms(['x', 'word-boundary']))).status).toBe(404);
   });

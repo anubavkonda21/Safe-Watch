@@ -288,6 +288,7 @@ describe('security: transcript text is untrusted data', () => {
 describe('GET /api/media/:id/transcript', () => {
   it('404s for unknown or malformed ids and wrong methods', async () => {
     app = await startTestApp({ extraction: {}, speech: { provider: null } });
+    app.login();
     for (const id of ['00000000-0000-4000-8000-000000000000', 'nope', '..%2Fx']) expect((await fetch(`${app.url}/api/media/${id}/transcript`)).status).toBe(404);
     const id = await send('speech-en.mp4');
     expect((await fetch(`${app.url}/api/media/${id}/transcript`, { method: 'POST' })).status).toBe(404);

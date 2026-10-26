@@ -132,6 +132,7 @@ describe('GET /api/media/:id/context', () => {
 describe('context API validation', () => {
   it.each(['nope', '00000000-0000-4000-8000-000000000000', '..%2F..%2Fetc%2Fpasswd', '%2e%2e', 'a%00b', '%2Fetc%2Fpasswd'])('unknown or malformed id %s is 404 and touches no files', async (bad) => {
     app = await startTestApp({ extraction: {} });
+    app.login();
     const res = await get(`/api/media/${bad}/context`);
     expect(res.status).toBe(404);
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
@@ -140,10 +141,15 @@ describe('context API validation', () => {
     const { id } = await run();
     for (const method of ['POST', 'PUT', 'DELETE', 'PATCH']) expect((await fetch(`${app.url}/api/media/${id}/context`, { method })).status).toBe(404);
   });
-  it('accepts no client-provided path or evidence: query parameters other than evidence=false are ignored', async () => {
+  it('accepts no client-provided path or file: unknown query parameters, and anything but evidence=true|false, are refused', async () => {
     const { id, context } = await run();
-    const res = await get(`/api/media/${id}/context?path=/etc/passwd&file=../../x&evidence=`);
-    expect(((await res.json()) as { context: ContextAnalysis }).context.events.length).toBe(context.events.length);
+    for (const q of ['path=/etc/passwd', 'file=../../x', 'evidence=', 'evidence=maybe', 'evidence=true&evidence=false', 'evidence=false&x=1']) {
+      const res = await get(`/api/media/${id}/context?${q}`);
+      expect(res.status, q).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_REQUEST');
+    }
+    const ok = await get(`/api/media/${id}/context?evidence=true`);
+    expect(((await ok.json()) as { context: ContextAnalysis }).context.events.length).toBe(context.events.length);
   });
   it('a media item without extraction wired reports pending with an honest status', async () => {
     app = await startTestApp({});

@@ -37,6 +37,9 @@ export const API_ERROR_CODES = [
   'SERVER_BUSY',
   'INVALID_REQUEST',
   'NOT_FOUND',
+  'UNAUTHENTICATED',
+  'RATE_LIMITED',
+  'QUOTA_EXCEEDED',
   'INTERNAL_ERROR',
 ] as const;
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];
@@ -113,6 +116,9 @@ const API_TO_MEDIA: Record<ApiErrorCode, MediaErrorCode> = {
   SERVER_BUSY: 'server-busy',
   INVALID_REQUEST: 'processing-failed',
   NOT_FOUND: 'processing-failed',
+  UNAUTHENTICATED: 'upload-failed',
+  RATE_LIMITED: 'server-busy',
+  QUOTA_EXCEEDED: 'server-busy',
   INTERNAL_ERROR: 'processing-failed',
 };
 

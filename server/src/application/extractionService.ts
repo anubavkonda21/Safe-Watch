@@ -12,6 +12,7 @@ import type { ExtractionContext, MediaExtractor } from './extractionPorts';
 import type { ExtractionLimits, StreamInventory } from './extractionTypes';
 import type { Logger, MediaRepository, MediaStorage } from './ports';
 import type { ProcessingQueue } from './processingQueue';
+import type { StorageQuota } from './storageQuota';
 
 export interface ExtractionServiceDeps {
   storage: MediaStorage;
@@ -20,6 +21,8 @@ export interface ExtractionServiceDeps {
   queue: ProcessingQueue;
   logger: Logger;
   limits: ExtractionLimits;
+  /** When present, the worst-case size of derived files is reserved before extraction and settled to the real size after. */
+  quota?: StorageQuota;
   now?: () => number;
   /** Called after an extraction has completed (used to start text analysis). */
   onCompleted?: (mediaId: string, requestId?: string) => void;
@@ -30,6 +33,7 @@ export interface ExtractionScheduler {
   schedule(mediaId: string, requestId?: string): void;
   /** Aborts a running extraction. Used before deleting or expiring media. */
   cancel(mediaId: string): void;
+  cancelAll?(): void;
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -71,6 +75,10 @@ export class MediaExtractionService implements ExtractionScheduler {
     job.controller.abort();
   }
 
+  cancelAll(): void {
+    for (const id of [...this.running.keys()]) this.cancel(id);
+  }
+
   private update(mediaId: string, change: (r: MediaRecord) => MediaRecord): MediaRecord {
     const record = this.deps.repository.get(mediaId);
     if (!record) throw new ExtractionError('cancelled'); // media deleted while extracting
@@ -96,12 +104,14 @@ export class MediaExtractionService implements ExtractionScheduler {
 
     try {
       this.update(mediaId, (r) => ({ ...r, extraction: startExtraction(r.extraction, iso(started)) }));
+      const original = queued.asset.sizeBytes;
       const result = await storage.withLocalFile(mediaId, (file) =>
         storage.withExtractionDir(mediaId, async (workspace) => {
           const ctx: ExtractionContext = { input: { ...file, container: queued.asset.container }, workspace, signal: controller.signal, limits, stats: { processes: 0 } };
           return this.extractAll(mediaId, ctx, queued.asset.metadata.durationSeconds);
         }),
       );
+      deps.quota?.resize(mediaId, original + result.metrics.outputBytes); // settle to what was really written
       const done = this.update(mediaId, (r) => ({ ...r, extraction: completeExtraction(r.extraction, { ...result, metrics: { ...result.metrics, durationMs: this.now() - started } }, iso(this.now())) }));
       deps.onCompleted?.(mediaId, requestId);
       logger.info('extraction completed', {
@@ -112,7 +122,10 @@ export class MediaExtractionService implements ExtractionScheduler {
     } catch (e) {
       const code: ExtractionErrorCode = job.reason ?? (e instanceof ExtractionError ? e.code : 'extraction-failed');
       // Partial outputs never survive a failure, timeout or cancellation.
-      await storage.deleteExtraction(mediaId).catch((err) => logger.error('extraction cleanup failed; will retry on sweep', { op: 'extract', mediaId, reason: err instanceof Error ? err.name : 'unknown' }));
+      await storage.deleteExtraction(mediaId).then(
+        () => { deps.quota?.resize(mediaId, queued.asset.sizeBytes); }, // derived files are gone: only the original remains charged
+        (err) => logger.error('extraction cleanup failed; will retry on sweep', { op: 'extract', mediaId, reason: err instanceof Error ? err.name : 'unknown' }),
+      );
       if (repository.get(mediaId)) {
         this.update(mediaId, (r) => ({ ...r, extraction: failExtraction(r.extraction, issue(code, stageOf(r.extraction.phase), true), iso(this.now())) }));
         logger.warn('extraction failed', { op: 'extract', requestId, mediaId, status: 'failed', code, durationMs: this.now() - started });
@@ -121,6 +134,25 @@ export class MediaExtractionService implements ExtractionScheduler {
       clearTimeout(timer);
       this.running.delete(mediaId);
     }
+  }
+
+  /**
+   * Upper bound of the derived files for one media item, from the configured caps and what the media actually contains:
+   * each audio track that will be extracted is at most duration x WAV rate, and each sampled frame is a JPEG that cannot
+   * exceed its raw RGB size (a hard bound, far above what JPEG produces). Both are further capped by the configured
+   * per-media totals.
+   */
+  private derivedCeiling(inv: StreamInventory, durationSeconds: number | null): number {
+    const { limits } = this.deps;
+    let audio = 0;
+    for (const stream of inv.audio.slice(0, limits.maxAudioTracks)) {
+      const seconds = stream.durationSeconds ?? durationSeconds;
+      audio += seconds === null ? limits.maxAudioBytes : Math.ceil(seconds * WAV_BYTES_PER_SECOND) + 4096;
+    }
+    audio = Math.min(audio, limits.maxAudioBytes);
+    const frameCount = durationSeconds === null ? 1 : planFrameTimestamps(durationSeconds, limits.frame).timestamps.length;
+    const frames = Math.min(limits.maxFrameBytes, frameCount * limits.frame.maxWidth * limits.frame.maxHeight * 3);
+    return audio + frames;
   }
 
   private async extractAll(mediaId: string, ctx: ExtractionContext, mediaDuration: number | null) {
@@ -134,6 +166,10 @@ export class MediaExtractionService implements ExtractionScheduler {
 
     const inventory = await extractor.inspect(ctx.input, ctx.signal);
     const duration = inventory.durationSeconds ?? mediaDuration;
+
+    // Derived files are charged to the same quota as the original: reserve their worst case before writing any of them.
+    const original = this.deps.repository.get(mediaId)?.asset.sizeBytes ?? 0;
+    if (this.deps.quota && !this.deps.quota.resize(mediaId, original + this.derivedCeiling(inventory, duration))) throw new ExtractionError('limit-exceeded');
 
     this.phase(mediaId, 'extracting-audio');
     const audio = await timed('audio', () => this.extractAudioTracks(mediaId, ctx, inventory, duration, warnings));

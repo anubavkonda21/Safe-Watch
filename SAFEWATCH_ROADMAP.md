@@ -21,7 +21,7 @@ Each checkpoint is reviewed before the next is started. Scopes below are intent,
 | 14 | Pre-Playback Warning | Summary and report before watching (the timed in-playback warning exists since Checkpoint 9) | PLANNED |
 | 15 | Filtering Engine | Beep, subtitle censoring, blur, rendered (edited) output and actions for further categories (mute and skip of flagged terms during playback exist since Checkpoint 8) | PLANNED |
 | 16 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
-| 17 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PLANNED |
+| 17 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PARTIAL: Checkpoint 10 delivered sessions/ownership, Host/Origin checks, rate limits, disk quota, process isolation (macOS Seatbelt only) and lifecycle fixes. Still open: Linux/Windows sandbox, TLS, accounts, encryption at rest, CSP, shared rate limiting, load testing, observability, cost controls (`SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.12) |
 | 18 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
 
 ## How the foundation supports this

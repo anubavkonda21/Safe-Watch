@@ -21,6 +21,9 @@ import { FfmpegMediaProcessor } from '../server/src/infrastructure/ffmpeg/ffmpeg
 import { InMemoryMediaRepository } from '../server/src/infrastructure/inMemoryMediaRepository';
 import { LocalDiskMediaStorage } from '../server/src/infrastructure/storage/localDiskMediaStorage';
 
+import { installCookieJar, testSecurity } from '../server/test/security';
+installCookieJar();
+const sec = testSecurity();
 const path = process.argv[2];
 if (!path) { console.error('Usage: npm run check:large -- <video file>'); process.exit(1); }
 
@@ -32,8 +35,8 @@ const logs: string[] = [];
 const quiet = { debug() {}, info: (m: string, f?: object) => logs.push(m + ' ' + JSON.stringify(f)), warn: (m: string, f?: object) => logs.push(m + ' ' + JSON.stringify(f)), error: (m: string, f?: object) => logs.push(m + ' ' + JSON.stringify(f)) };
 const storage = new LocalDiskMediaStorage(storageDir);
 const limits = { maxUploadBytes: 8 * 1024 * MB, maxConcurrentUploads: 4, processingTimeoutMs: 120_000, retentionMs: 3_600_000 };
-const service = new MediaService({ storage, repository: new InMemoryMediaRepository(), processor: new FfmpegMediaProcessor(ffmpeg), queue: new ProcessingQueue(2, 10), logger: quiet, limits });
-const server = createApiServer({ mediaService: service, logger: quiet, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false }, vision: { provider: 'none', available: false } } });
+const service = new MediaService({ quota: sec.quota, storage, repository: new InMemoryMediaRepository(), processor: new FfmpegMediaProcessor(ffmpeg), queue: new ProcessingQueue(2, 10), logger: quiet, limits });
+const server = createApiServer({ mediaService: service, logger: quiet, security: sec.security, rate: sec.rate, sessions: sec.sessions, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'none', available: false }, vision: { provider: 'none', available: false } } });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const port = (server.address() as AddressInfo).port;
 

@@ -7,5 +7,6 @@ export class InMemoryMediaRepository implements MediaRepository {
   get = (id: string) => this.records.get(id);
   set = (record: MediaRecord) => { this.records.set(record.asset.id, record); };
   delete = (id: string) => { this.records.delete(id); };
+  byOwner = (ownerId: string) => [...this.records.values()].filter((r) => r.ownerId === ownerId);
   expired = (now: number) => [...this.records.values()].filter((r) => r.expiresAt <= now);
 }

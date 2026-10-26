@@ -32,6 +32,9 @@ import { InMemoryMediaRepository } from '../server/src/infrastructure/inMemoryMe
 import { WhisperCppProvider } from '../server/src/infrastructure/speech/whisperCppProvider';
 import { LocalDiskMediaStorage } from '../server/src/infrastructure/storage/localDiskMediaStorage';
 
+import { installCookieJar, testSecurity } from '../server/test/security';
+installCookieJar();
+const sec = testSecurity();
 const files = process.argv.slice(2);
 if (files.length === 0) { console.error('Usage: npm run check:speech -- <video> [more...]'); process.exit(1); }
 
@@ -51,8 +54,8 @@ const extraction = new MediaExtractionService({
   storage, repository, logger, extractor: new FfmpegMediaExtractor(config), queue: new ProcessingQueue(1, 10), onCompleted: (id) => text.schedule(id),
   limits: { timeoutMs: ex.timeoutMs, frame: ex.frame, maxFrameBytes: ex.maxFrameBytes, maxAudioBytes: 4096 * MB, maxAudioTracks: ex.maxAudioTracks, maxCues: ex.maxCues, maxSubtitleBytes: ex.maxSubtitleBytes },
 });
-const mediaService = new MediaService({ storage, repository, logger, extraction, textAnalysis: text, processor: new FfmpegMediaProcessor(config), queue: new ProcessingQueue(2, 10), limits: { ...config, processingTimeoutMs: 120_000 } });
-const server = createApiServer({ mediaService, logger, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'whispercpp', available: true }, vision: { provider: 'none', available: false } } });
+const mediaService = new MediaService({ quota: sec.quota, storage, repository, logger, extraction, textAnalysis: text, processor: new FfmpegMediaProcessor(config), queue: new ProcessingQueue(2, 10), limits: { ...config, processingTimeoutMs: 120_000 } });
+const server = createApiServer({ mediaService, logger, security: sec.security, rate: sec.rate, sessions: sec.sessions, limits: { uploadTimeoutMs: 3_600_000 }, allowedOrigins: [], health: { version: 'check', environment: 'test', tools: { ffmpeg: true, ffprobe: true }, speech: { provider: 'whispercpp', available: true }, vision: { provider: 'none', available: false } } });
 await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 const port = (server.address() as AddressInfo).port;
 const mimeFor = (f: string) => ({ '.mp4': 'video/mp4', '.mkv': 'video/x-matroska', '.webm': 'video/webm' })[extname(f).toLowerCase()] ?? 'video/mp4';
@@ -125,7 +128,7 @@ for (const file of files) {
     ...(process.env.EXPECTED_TEXT ? { wordErrorRate: r2(wer(process.env.EXPECTED_TEXT, fullText)) } : {}),
     sample: fullText.slice(0, 160),
   }, null, 2));
-  await mediaService.delete(id);
+  await mediaService.delete(id, repository.get(id)!.ownerId);
 }
 
 server.closeAllConnections();

@@ -12,6 +12,9 @@ export const STATUS_FOR: Record<ApiErrorCode, number> = {
   SERVER_BUSY: 503,
   INVALID_REQUEST: 400,
   NOT_FOUND: 404,
+  UNAUTHENTICATED: 401,
+  RATE_LIMITED: 429,
+  QUOTA_EXCEEDED: 507,
   INTERNAL_ERROR: 500,
 };
 
@@ -28,6 +31,9 @@ export const MESSAGE_FOR: Record<ApiErrorCode, string> = {
   SERVER_BUSY: 'The server is busy. Try again shortly.',
   INVALID_REQUEST: 'The request is not valid.',
   NOT_FOUND: 'Not found.',
+  UNAUTHENTICATED: 'No valid session. Upload a file to start one.',
+  RATE_LIMITED: 'Too many requests. Slow down and try again shortly.',
+  QUOTA_EXCEEDED: 'SafeWatch has no room for this file right now. Remove media or try later.',
   INTERNAL_ERROR: 'Something went wrong on the server.',
 };
 

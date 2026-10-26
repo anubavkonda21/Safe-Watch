@@ -3,8 +3,9 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 const ALLOW_HEADERS = 'content-type, x-safewatch-filename, x-request-id';
 
 /**
- * Explicit-origin CORS. Responses never use "*". Credentials are not enabled
- * (the API has no cookies). A browser on any other origin gets no CORS
+
+ * Explicit-origin CORS. Responses never use "*". Credentials (the HttpOnly
+ * session cookie) are allowed only for the exact origins listed. A browser on any other origin gets no CORS
  * headers and is blocked by the browser itself.
  *
  * Returns true if the request was a preflight and has been fully answered.
@@ -15,6 +16,7 @@ export function applyCors(req: IncomingMessage, res: ServerResponse, allowedOrig
   res.setHeader('Vary', 'Origin');
   if (allowed) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true'); // the session cookie; only for the exact origins listed
     res.setHeader('Access-Control-Expose-Headers', 'x-request-id, location');
   }
   if (req.method !== 'OPTIONS') return false;

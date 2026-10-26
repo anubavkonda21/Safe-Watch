@@ -70,6 +70,10 @@ export class VisualAnalysisService {
     job.controller.abort('cancelled');
   }
 
+  cancelAll(): void {
+    for (const id of [...this.running.keys()]) this.cancel(id);
+  }
+
   private update(mediaId: string, change: (r: MediaRecord) => MediaRecord) {
     const record = this.deps.repository.get(mediaId);
     if (!record) throw new VisionError('cancelled');
