@@ -367,7 +367,9 @@ describe('settings and the master switch', () => {
     await watch(fake, 10);
     expect(container.querySelector('.sw-warnslot')).toBe(slot);
     expect(slot).toContainElement(warnCard()!);
-    expect(slot.previousElementSibling).toBe(screen.getByLabelText('Uploaded video preview')); // directly under the player, so keyboard order follows the video controls
+    // Keyboard order follows the video controls: player, then its "+10 s" button, then the heads-up place.
+    expect(slot.previousElementSibling).toBe(container.querySelector('.sw-pseek'));
+    expect(container.querySelector('.sw-pseek')!.previousElementSibling).toBe(screen.getByLabelText('Uploaded video preview'));
   });
   it('a failure inside the scheduler removes warnings and stops automatic actions without touching playback', async () => {
     const { fake } = await mount(await ready());

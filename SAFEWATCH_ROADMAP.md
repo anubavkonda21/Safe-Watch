@@ -16,15 +16,16 @@ Each checkpoint is reviewed before the next is started. Scopes below are intent,
 | 9 | Complete Product Experience | Pre-emptive warning shortly before a supported finding (reusing the Checkpoint 8 Skip/Ignore actions), a saved custom-phrase workflow (add, edit, remove, saved/active state), validated local preferences, local-only missed-finding feedback, honest onboarding and analysis status, accessibility and layout polish. No new detection and no new category | DONE (flagged terms only) |
 | 10 | YouTube Player Integration | Paste a YouTube link (watch, youtu.be, Shorts), watch it in YouTube's own embedded player, and check the user's phrases against a caption file the user provides, with warnings, skip and mute through the existing playback engine. Speech and scene analysis are NOT possible for embedded YouTube video through permitted means; unsupported categories stay unsupported (`SAFEWATCH_MEDIA_ARCHITECTURE.md` §33) | DONE (player + user-supplied captions only) |
 | 11 | Truthful UI & Accessibility Pass | Landing page and interface copy corrected to match the application (uploads, YouTube, unsupported categories); touch targets at least 44 px (one documented exception); axe-core scans, keyboard and overflow checks at four widths; no screen-reader testing, no compliance claim (`CHECKPOINT_12_REPORT.md`) | DONE (partial: no screen-reader or zoom testing) |
-| 12 | Custom Word/Phrase Detection (remaining) | Builds on Checkpoints 4 and 9 (matching, local list workflow exist): server-side/shared filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
-| 13 | Visual Content Detection | Needs a genuine local visual or multimodal classifier for violence, graphic injury, drugs and sexual content (blocked in Checkpoint 7: see `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.2), with a labelled evaluation set | PLANNED |
-| 14 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
-| 15 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
-| 16 | Pre-Playback Warning | Summary and report before watching (the timed in-playback warning exists since Checkpoint 9) | PLANNED |
-| 17 | Filtering Engine | Beep, subtitle censoring, blur, rendered (edited) output and actions for further categories (mute and skip of flagged terms during playback exist since Checkpoint 8) | PLANNED |
-| 18 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
-| 19 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PARTIAL: Checkpoint 10 delivered sessions/ownership, Host/Origin checks, rate limits, disk quota, process isolation (macOS Seatbelt only) and lifecycle fixes. Still open: Linux/Windows sandbox, TLS, accounts, encryption at rest, CSP, shared rate limiting, load testing, observability, cost controls (`SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.12) |
-| 20 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
+| 12 | Playback Controls | A +10 s button (local video and YouTube) and swipe-to-dismiss for warnings; both are additive, change no skip or mute semantics, and are verified in a real browser (`CHECKPOINT_13_REPORT.md`) | DONE |
+| 13 | Custom Word/Phrase Detection (remaining) | Builds on Checkpoints 4 and 9 (matching, local list workflow exist): server-side/shared filter lists, profanity baseline lists, better handling of mixed-language and misheard terms | PLANNED |
+| 14 | Visual Content Detection | Needs a genuine local visual or multimodal classifier for violence, graphic injury, drugs and sexual content (blocked in Checkpoint 7: see `SAFEWATCH_MEDIA_ARCHITECTURE.md` §29.2), with a labelled evaluation set | PLANNED |
+| 15 | Contextual AI | Scene-level understanding so context informs severity | PLANNED |
+| 16 | Risk & Safety Report | Detection aggregation, safety score, content timeline | PLANNED |
+| 17 | Pre-Playback Warning | Summary and report before watching (the timed in-playback warning exists since Checkpoint 9) | PLANNED |
+| 18 | Filtering Engine | Beep, subtitle censoring, blur, rendered (edited) output and actions for further categories (mute and skip of flagged terms during playback exist since Checkpoint 8) | PLANNED |
+| 19 | User Policies & Presets | Safety presets, custom policies, persistence, accounts as needed | PLANNED |
+| 20 | Security + Performance | Hardening, rate limits, cost controls, load testing, observability | PARTIAL: Checkpoint 10 delivered sessions/ownership, Host/Origin checks, rate limits, disk quota, process isolation (macOS Seatbelt only) and lifecycle fixes. Still open: Linux/Windows sandbox, TLS, accounts, encryption at rest, CSP, shared rate limiting, load testing, observability, cost controls (`SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.12) |
+| 21 | Final Product Polish | UX refinement, empty/error states, accessibility audit, deployment | PLANNED |
 
 ## How the foundation supports this
 

@@ -198,13 +198,17 @@
 .sw-playback .sw-details__body { overflow-wrap: anywhere; }
 
 /* Upcoming-warning slot: a fixed-height place under the player, so a warning never covers the picture, captions or controls and nothing jumps. */
+.sw-pseek { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--sw-s-2) var(--sw-s-3); }
 .sw-warnslot { position: relative; display: grid; align-items: center; min-height: 92px; }
 .sw-warnslot__hint { text-align: center; }
 .sw-warn {
   position: relative; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sw-s-2) var(--sw-s-3); width: 100%; padding: var(--sw-s-3) var(--sw-s-3) calc(var(--sw-s-3) + 3px);
   background: var(--sw-surface-2); border: 1px solid var(--sw-accent-border); border-radius: var(--sw-r-card); overflow: hidden;
   animation: sw-warn-in var(--sw-t-normal) var(--sw-ease);
+  touch-action: pan-y; /* vertical scrolling stays with the page; sideways drags reach the swipe-to-dismiss handler */
 }
+.sw-warn.is-dragging { transition: none; user-select: none; cursor: grabbing; }
+.sw-warn.is-settling { transition: transform var(--sw-t-fast) var(--sw-ease), opacity var(--sw-t-fast) var(--sw-ease); }
 .sw-warn__body { display: grid; gap: var(--sw-s-1); min-width: 0; flex: 1 1 200px; }
 .sw-warn__title { font-weight: 500; }
 .sw-warn__detail { overflow-wrap: anywhere; }
@@ -216,6 +220,7 @@
 @keyframes sw-warn-bar { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 @media (prefers-reduced-motion: reduce) {
   .sw-warn { animation: none; }
+  .sw-warn.is-settling { transition: none; }
   .sw-warn__bar { display: none; }
 }
 @media (max-width: 479px) {

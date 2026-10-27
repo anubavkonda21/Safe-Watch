@@ -6,7 +6,7 @@ const STEPS = [
   { title: 'Choose', body: 'Pick a video file from your device, or paste a YouTube link. Add the words or phrases you want to find.', note: 'Works for both' },
   { title: 'Check', body: 'For a file, your words are matched against its speech and subtitles. For YouTube, against a caption file you add: SafeWatch cannot hear or see a YouTube video.', note: 'Speech: files only' },
   { title: 'Review', body: 'Matches are listed with their times and how exact those times are. There is no score and no verdict.', note: 'Works for both' },
-  { title: 'Watch', body: 'Optional warnings, mute or skip while you watch. Nothing happens unless you choose it.', note: 'Works for both' },
+  { title: 'Watch', body: 'Optional warnings (tap the X, press Escape or swipe one away), mute or skip, and a +10 s button. Nothing happens unless you choose it.', note: 'Works for both' },
 ] as const;
 
 export function HowItWorks() {

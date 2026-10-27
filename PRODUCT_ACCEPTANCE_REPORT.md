@@ -1,4 +1,6 @@
-# SafeWatch: Product Acceptance Audit (Phase 1, updated after Checkpoints 11 and 12)
+# SafeWatch: Product Acceptance Audit (Phase 1, updated after Checkpoints 11, 12 and 13)
+
+> **Update, Checkpoint 13.** Requirement 7 ("slide away") and requirement 8 ("skip forward 10 seconds") are now implemented and verified (section 10).
 
 > **Update, Checkpoint 12 (truthful UI and accessibility).** B1, B2, B3 and B4 below are fixed (section 9). Rows 15 and 16 improved; everything else is as stated in section 8 and earlier.
 
@@ -102,3 +104,9 @@ That the original "slide away" meant a swipe gesture; that "skip 10 seconds" mea
 - **#15 Privacy**: now **IV** for the page text as well as the panels (the contradiction is gone).
 - **#16 Responsive and accessibility**: **P / INV**, improved: 0 axe violations in a real browser at four widths and in jsdom, keyboard order and focus outlines observed, no overflow. **Not verified**: any screen reader, zoom/reflow at 200-400%, reduced motion and forced colours in a browser, physical touch devices, browsers other than Chromium. Accessibility compliance is not claimed.
 - **Still not implemented (unchanged)**: "+10 s" button (#8), swipe/slide dismissal (#7), a category other than "flagged phrase" in the warning (#5), censorship beyond mute and skip (#11), scene detection (#12), learning from reports (#14).
+
+## 10. Checkpoint 13 addendum (facts; evidence in `CHECKPOINT_13_REPORT.md`)
+
+- **#7 Dismiss or slide away: IV.** A warning can be dismissed with the X button, Escape, or a sideways swipe of at least 80 px (or 30% of the card, whichever is smaller) with touch, pen or mouse; a short drag springs back; a vertical movement scrolls the page; dismissing changes nothing about playback or the finding's choice. Tests: `src/features/playback/UpcomingWarning.swipe.test.tsx` (13), `swipe.test.ts` (8), panel-level tests in `SkipForward.test.tsx`. Real browser (375 px wide): a real mouse drag of about 110 CSS px dismissed the card (gone within 0.1 s of it appearing on a local video; confirmed gone 1.5 s later on the real YouTube player, before the 3 s expiry), with playback still running, no mute and the choice still "none"; a drag of about 20 CSS px left the card in place. Not tested on a physical touch screen.
+- **#8 Button to skip forward 10 seconds: IV.** A "+10 s" button (accessible name "Skip forward 10 seconds", 44 px) under the player, for local files and for YouTube. Local: 3.0 s paused → 13.0 s, still paused; playing keeps playing; clamped to the end (36 s → 40 s). YouTube (real player): 2.0 s → 13.4 s → 24.8 s (each press +10 s plus the playback during the 1.5 s wait). It is the viewer's own seek: a jump into a skip span is respected, a jump past a finding leaves no stale warning, mute is restored when the jump leaves a muted span. The warning's own "Skip" button is unchanged (it arms the finding's skip action; it is not +10 s).
+- **Still open (unchanged)**: a warning category other than "flagged phrase" (#5), censorship beyond mute and skip (#11), scene detection (#12), learning from reports (#14).

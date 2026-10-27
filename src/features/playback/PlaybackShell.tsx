@@ -4,6 +4,8 @@ import { Button } from '@/components/ui/Button';
 import { actionsOf, resolveViews, INITIAL_SETTINGS, type ActionChoice, type FindingActionView } from '@/domain/playback/actions';
 import type { CoordinatorEvent } from '@/domain/playback/coordinator';
 import { planCandidates } from '@/domain/playback/planning';
+import { forwardTarget, SKIP_FORWARD_MS } from '@/domain/playback/seekForward';
+import { formatTimecode } from '@/domain/media/format';
 import { buildWarningGroups } from '@/domain/warnings/groups';
 import type { ActiveWarning, WarningEvent } from '@/domain/warnings/scheduler';
 import { FeedbackPanel } from '@/features/feedback/FeedbackPanel';
@@ -96,11 +98,28 @@ export function PlaybackShell({ mediaId, safety, sourceKey, driver, player, noti
 
   const note = statusNote === undefined ? analysisNote(safety, candidates) : statusNote;
   const jump = (v: FindingActionView) => { seekToMs?.(Math.max(0, v.candidate.startMs - 1500)); };
+  /**
+   * "+10 s": the viewer's own jump forward, independent of any finding. It is a seek the USER makes, so the coordinator treats it
+   * like any other user seek (a jump into a skip span is respected, nothing is muted or skipped on the viewer's behalf), and the
+   * warning scheduler simply re-reads the position. It never goes backward and never past the end.
+   */
+  const skipForward = () => {
+    if (!seekToMs) return;
+    const target = forwardTarget(playheadMs(), durationMs);
+    if (!target) { setAnnouncement('The player has not said where it is yet, so it cannot skip forward.'); return; }
+    if (!target.moved) { setAnnouncement('Already at the end of the video.'); return; }
+    seekToMs(target.targetMs);
+    setAnnouncement(`Skipped forward ${SKIP_FORWARD_MS / 1000} seconds, to ${formatTimecode(target.targetMs / 1000)}.`);
+  };
 
   return (
     <section className="sw-playback" aria-label="Playback">
       <p className="sw-label sw-muted">{label}</p>
       {player}
+      <div className="sw-pseek">
+        <Button variant="secondary" onClick={skipForward} disabled={seekToMs === null} aria-label={`Skip forward ${SKIP_FORWARD_MS / 1000} seconds`}>+{SKIP_FORWARD_MS / 1000} s</Button>
+        {seekToMs === null && <span className="sw-caption sw-muted">Available once the player is ready.</span>}
+      </div>
       {slot && (
         // A fixed-height place under the player: a warning appears here instead of over the picture, the captions or the controls, and the layout never jumps.
         <div className="sw-warnslot">

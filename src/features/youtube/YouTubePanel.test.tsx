@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { filtersStore } from '@/features/filters/filtersStore';
 import { preferencesStore } from '@/features/preferences/preferencesStore';
 import { loadYouTubeIframeApi, YouTubeApiError } from '@/infrastructure/youtube/iframeApi';
+import { drag } from '@/test/pointer';
 import { FakeYTPlayer, fakeYTApi, SAMPLE_ID, SAMPLE_URL } from '@/test/youtube';
 import { YouTubePanel } from './YouTubePanel';
 
@@ -366,5 +367,98 @@ describe('switching and cleaning up', () => {
     unmount();
     expect(FakeYTPlayer.instances.filter((x) => !x.destroyed)).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('+10 s and swipe-to-dismiss on a YouTube video', () => {
+  const plus10 = () => screen.getByRole('button', { name: 'Skip forward 10 seconds' });
+  const timers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance'] });
+
+  it('is disabled until the player is ready, then enabled', async () => {
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    expect(plus10()).toBeDisabled();
+    expect(screen.getByText('Available once the player is ready.')).toBeInTheDocument();
+    await readyPlayer();
+    expect(plus10()).toBeEnabled();
+  });
+
+  it('is disabled again if the player reports an error', async () => {
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await readyPlayer();
+    await act(async () => { FakeYTPlayer.last.fireError(150); });
+    // The button is only live while the player is ready.
+    expect(plus10()).toBeDisabled();
+  });
+
+  it('seeks the YouTube player ten seconds ahead with the documented seekTo, and announces it', async () => {
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await readyPlayer({ time: 12.5 });
+    FakeYTPlayer.last.time = 12.5;
+    fireEvent.click(plus10());
+    expect(FakeYTPlayer.last.seeks).toEqual([[22.5, true]]);
+    expect(screen.getAllByRole('status').some((e) => /Skipped forward 10 seconds, to 0:22/.test(e.textContent ?? ''))).toBe(true);
+    expect(FakeYTPlayer.last.muteCalls).toEqual([]); // nothing else is touched
+  });
+
+  it('never goes past the length of the video, never backward, and does nothing at the end', async () => {
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await readyPlayer();
+    const p = FakeYTPlayer.last;
+    p.duration = 600; p.time = 595; fireEvent.click(plus10());
+    expect(p.seeks).toEqual([[600, true]]);
+    p.time = 600; fireEvent.click(plus10());
+    p.time = 700; fireEvent.click(plus10());
+    expect(p.seeks).toHaveLength(1);
+  });
+
+  it('with a live (zero-length) video it still moves ten seconds and invents no limit', async () => {
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await readyPlayer();
+    const p = FakeYTPlayer.last; p.duration = 0; p.time = 40;
+    fireEvent.click(plus10());
+    expect(p.seeks).toEqual([[50, true]]);
+  });
+
+  it('is the viewer’s own seek: landing inside a skip span is respected, nothing skips the viewer out of it', async () => {
+    timers();
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await act(async () => { FakeYTPlayer.last.fireReady(); });
+    const srt = '1\n00:00:30,000 --> 00:00:40,000\nThe darn thing broke.\n';
+    await act(async () => { fireEvent.change(screen.getByLabelText(/Caption file \(SRT or WebVTT\)/), { target: { files: [new File([srt], 'c.srt')] } }); await vi.advanceTimersByTimeAsync(50); });
+    fireEvent.change(screen.getAllByRole('combobox', { name: /Action for the finding at 0:30/ })[0]!, { target: { value: 'skip' } });
+    const p = FakeYTPlayer.last;
+    p.time = 25; await act(async () => { p.fireState(1); });
+    const tick = setInterval(() => { if (p.state === 1) p.time += 0.05; }, 50);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    fireEvent.click(plus10()); // 25.5 → 35.5, inside the span
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(p.seeks).toEqual([[expect.closeTo(35.5, 1), true]]);
+    expect(p.time).toBeGreaterThan(38);
+    clearInterval(tick);
+  });
+
+  it('swiping the warning away dismisses it without seeking, muting or choosing an action', async () => {
+    timers();
+    render(<YouTubePanel />);
+    await submit(SAMPLE_URL);
+    await act(async () => { FakeYTPlayer.last.fireReady(); });
+    await act(async () => { fireEvent.change(screen.getByLabelText(/Caption file \(SRT or WebVTT\)/), { target: { files: [new File([SRT], 'c.srt')] } }); await vi.advanceTimersByTimeAsync(50); });
+    const p = FakeYTPlayer.last;
+    p.time = 9; await act(async () => { p.fireState(1); });
+    const tick = setInterval(() => { if (p.state === 1) p.time += 0.05; }, 50);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    const card = screen.getByRole('group', { name: 'Upcoming flagged phrase' });
+    card.getBoundingClientRect = () => ({ width: 288, height: 120, top: 0, left: 0, right: 288, bottom: 120, x: 0, y: 0, toJSON: () => ({}) });
+    await act(async () => { drag(card, [230, 60], [50, 62]); });
+    expect(screen.queryByRole('group', { name: 'Upcoming flagged phrase' })).toBeNull();
+    expect(p.seeks).toEqual([]); expect(p.muteCalls).toEqual([]); expect(p.state).toBe(1);
+    expect(screen.getAllByRole('combobox', { name: /Action for the finding at 0:30/ })[0]).toHaveValue('none');
+    clearInterval(tick);
   });
 });

@@ -1,8 +1,10 @@
-import type { FocusEvent, KeyboardEvent } from 'react';
+import { useRef, type FocusEvent, type KeyboardEvent } from 'react';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { CloseIcon } from '@/components/ui/icons';
 import type { ActiveWarning } from '@/domain/warnings/scheduler';
+import { cn } from '@/lib/cn';
+import { useSwipeToDismiss } from './useSwipeToDismiss';
 
 interface Props {
   warning: ActiveWarning;
@@ -52,8 +54,20 @@ export function UpcomingWarning({ warning, note = null, durationMs, onSkip, onIg
   // Keep it while the pointer or keyboard focus is on it (users need time to act); resume when both have left.
   const leave = (e: FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onRelease(); };
   const plan = planOf(warning);
+  // Swipe sideways to dismiss (touch, pen or mouse). Same effect as the X button: the warning goes away and playback is untouched.
+  // The countdown is held while a finger is dragging, and resumes if the drag is let go early (unless the pointer or focus is still on it).
+  const hovered = useRef(false);
+  const card = useRef<HTMLDivElement>(null);
+  const swipe = useSwipeToDismiss({
+    onDismiss,
+    onStart: onHold,
+    onCancel: () => { if (!hovered.current && !card.current?.contains(document.activeElement)) onRelease(); },
+  });
   return (
-    <div className="sw-warn" role="group" aria-label="Upcoming flagged phrase" onMouseEnter={onHold} onMouseLeave={onRelease} onFocus={onHold} onBlur={leave}>
+    <div
+      ref={card} className={cn('sw-warn', swipe.dragging && 'is-dragging', swipe.settling && 'is-settling')} style={swipe.style} role="group" aria-label="Upcoming flagged phrase"
+      onMouseEnter={() => { hovered.current = true; onHold(); }} onMouseLeave={() => { hovered.current = false; onRelease(); }} onFocus={onHold} onBlur={leave} {...swipe.handlers}
+    >
       <div className="sw-warn__body">
         <p className="sw-body-sm sw-warn__title">{warningTitle(warning)}</p>
         <p className="sw-caption sw-muted sw-warn__detail">{warningPhrases(warning)} {warningWhen(warning)}{plan ? ` ${plan}` : ''}{note ? ` ${note}` : ''}</p>

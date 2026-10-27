@@ -8,7 +8,7 @@ import { ControlIcon, DetectIcon, UnderstandIcon } from '@/components/ui/icons';
 const FEATURES: ReadonlyArray<{ icon: ReactNode; title: string; body: string }> = [
   { icon: <DetectIcon />, title: 'Find', body: 'Finds your words and phrases in the speech of a video file (recognised on your own machine, when speech recognition is set up) and in its subtitles, or in a caption file you add for a YouTube video.' },
   { icon: <UnderstandIcon />, title: 'Warn', body: 'Shows a heads-up about 20 seconds before a match, and says plainly when a match was found too late to warn in time.' },
-  { icon: <ControlIcon />, title: 'Control', body: 'Mutes or skips a match while you watch, but only if you choose it. By default nothing happens.' },
+  { icon: <ControlIcon />, title: 'Control', body: 'Mutes or skips a match while you watch, but only if you choose it, and a +10 s button jumps ahead whenever you want. By default nothing happens.' },
 ];
 
 export function FeaturePreview() {

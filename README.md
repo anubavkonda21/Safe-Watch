@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 13 — +10 s button and swipe-to-dismiss.** A **+10 s** button under the player (local video and YouTube) jumps ten seconds ahead of wherever you are (never backward, never past the end); it is your own seek, so it never triggers or fights an automatic skip. A warning can now be dismissed by swiping it sideways (touch, pen or mouse) as well as with the X button or Escape; dismissing never skips, mutes or changes anything. See `CHECKPOINT_13_REPORT.md`.
+
 **Checkpoint 12 — truthful interface and accessibility pass.** The landing page no longer makes claims the application contradicts (it used to say nothing is uploaded and that scenes are analysed); it now states where a file, a YouTube link and your words go, and what is not supported. Touch targets are at least 44 px (one documented exception), measured in a real browser at 320, 375, 768 and 1280 px, with an axe-core scan and keyboard checks. No screen reader was used and accessibility compliance is not claimed. See `CHECKPOINT_12_REPORT.md`.
 
 **Checkpoint 11 — YouTube player.** Paste a YouTube link (watch, youtu.be or Shorts) and watch the video in YouTube's own embedded player inside SafeWatch. If you have a caption file for that video (SRT or WebVTT), SafeWatch checks your phrases against it and gives the same advance warnings, Skip/Ignore, mute and skip as for a local file. **SafeWatch cannot hear or see an embedded YouTube video**: YouTube gives the page no audio, no picture and no caption text (only the video's owner can download captions), and downloading them is not allowed. So for YouTube there is no speech recognition and no scene detection; use the local file option for speech. Loading a video contacts YouTube. See `CHECKPOINT_11_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §33.
@@ -311,7 +313,7 @@ npm run dev
 
 ## Roadmap
 
-See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 20).
+See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 21).
 
 ## Development workflow
 
