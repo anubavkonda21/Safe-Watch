@@ -3,11 +3,7 @@ import type { PlaybackAction } from '@/domain/playback/actions';
 import { PlaybackCoordinator, type CoordinatorEvent, type PlaybackSignal } from '@/domain/playback/coordinator';
 import type { WarningGroup } from '@/domain/warnings/groups';
 import { WarningScheduler, type WarningEvent, type WarningSettings } from '@/domain/warnings/scheduler';
-import { VideoSurface } from './videoSurface';
-
-const SIGNALS: Array<[string, PlaybackSignal]> = [
-  ['timeupdate', 'timeupdate'], ['play', 'play'], ['playing', 'play'], ['pause', 'pause'], ['seeked', 'seeked'], ['ended', 'ended'], ['volumechange', 'volumechange'],
-];
+import type { PlaybackDriver } from './driver';
 
 /** The boundary timer fires this long BEFORE the boundary (covers timer jitter), never more often than every MIN_WAIT_MS, never later than MAX_WAIT_MS. */
 const LEAD_MS = 40;
@@ -31,8 +27,8 @@ export interface WarningControls {
 }
 
 interface Options {
-  /** The element, or null before it exists. */
-  video: HTMLVideoElement | null;
+  /** The player (a video element or the YouTube player, behind one interface), or null before it exists. */
+  driver: PlaybackDriver | null;
   /** Changes when the source changes: the coordinator, the warning scheduler (and everything they applied) are rebuilt. */
   sourceKey: string;
   actions: readonly PlaybackAction[];
@@ -44,14 +40,14 @@ interface Options {
 }
 
 /**
- * Binds the CP8 coordinator and the heads-up scheduler to ONE video element, with one set of listeners and one timer: the same
+ * Binds the CP8 coordinator and the heads-up scheduler to ONE player, with one set of listeners and one timer: the same
  * player events and (while playing) every animation frame feed both, and the timer wakes at whichever boundary comes first
  * (a mute or skip boundary, a warning window opening, a warning expiring). Nothing expensive happens per event.
  *
  * Failure isolation: any exception disposes both (restoring the user's audio and removing any warning), stops automatic actions
  * and reports once. Ordinary playback and the player's own controls are never affected.
  */
-export function usePlaybackCoordinator({ video, sourceKey, actions, autoEnabled, onEvent, onFailure, warning }: Options): WarningControls {
+export function usePlaybackCoordinator({ driver, sourceKey, actions, autoEnabled, onEvent, onFailure, warning }: Options): WarningControls {
   const coordinator = useRef<PlaybackCoordinator | null>(null);
   const warner = useRef<WarningScheduler | null>(null);
   const latest = useRef({ actions, autoEnabled, onEvent, onFailure, warning });
@@ -59,9 +55,9 @@ export function usePlaybackCoordinator({ video, sourceKey, actions, autoEnabled,
   useEffect(() => { latest.current = { actions, autoEnabled, onEvent, onFailure, warning }; });
 
   useEffect(() => {
-    if (!video) return;
+    if (!driver) return;
     let failed = false;
-    const surface = new VideoSurface(video);
+    const surface = driver.surface;
     const c = new PlaybackCoordinator(surface, (e) => latest.current.onEvent(e));
     const w = new WarningScheduler(surface, () => performance.now(), (e) => latest.current.warning?.onEvent(e));
     coordinator.current = c;
@@ -91,31 +87,30 @@ export function usePlaybackCoordinator({ video, sourceKey, actions, autoEnabled,
       if (waits.length === 0) return;
       timer = setTimeout(() => { timer = null; signal('frame'); schedule(); }, Math.max(MIN_WAIT_MS, Math.min(MAX_WAIT_MS, Math.min(...waits) - LEAD_MS)));
     };
-    const loop = () => { signal('frame'); if (!failed && !video.paused) raf = requestAnimationFrame(loop); };
+    const loop = () => { signal('frame'); if (!failed && driver.isPlaying()) raf = requestAnimationFrame(loop); };
     const startLoop = () => { if (!raf && typeof requestAnimationFrame === 'function') raf = requestAnimationFrame(loop); };
     function stopLoop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } if (timer) { clearTimeout(timer); timer = null; } }
 
-    const listeners = SIGNALS.map(([name, s]): [string, () => void] => [name, () => {
+    const unlisten = driver.listen((s) => {
       signal(s);
       schedule();
-      if (name === 'play' || name === 'playing') startLoop();
-      if (name === 'ended') stopLoop();
-      if (name === 'pause') { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
-    }]);
+      if (s === 'play') startLoop();
+      if (s === 'ended') stopLoop();
+      if (s === 'pause') { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+    });
     // A tab that was in the background wakes up with an outdated state: evaluate at once on return.
     const onVisible = () => { if (document.visibilityState === 'visible') { signal('frame'); schedule(); } };
     scheduler.current = schedule;
-    for (const [name, fn] of listeners) video.addEventListener(name, fn);
     document.addEventListener('visibilitychange', onVisible);
     guard(() => {
       c.setActions(latest.current.actions, latest.current.autoEnabled);
       const inputs = latest.current.warning;
       if (inputs) w.setInputs(inputs.groups, inputs.settings, latest.current.autoEnabled);
     });
-    if (!video.paused) { startLoop(); schedule(); }
+    if (driver.isPlaying()) { startLoop(); schedule(); }
 
     return () => {
-      for (const [name, fn] of listeners) video.removeEventListener(name, fn);
+      unlisten();
       document.removeEventListener('visibilitychange', onVisible);
       stopLoop();
       try { c.dispose(); } catch { /* the element may already be gone */ }
@@ -124,7 +119,7 @@ export function usePlaybackCoordinator({ video, sourceKey, actions, autoEnabled,
       if (warner.current === w) warner.current = null;
       scheduler.current = null;
     };
-  }, [video, sourceKey]);
+  }, [driver, sourceKey]);
 
   useEffect(() => {
     try { coordinator.current?.setActions(actions, autoEnabled); scheduler.current?.(); } catch { latest.current.onFailure(); }

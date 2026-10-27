@@ -753,3 +753,91 @@ Loopback by default. A non-loopback `SAFEWATCH_HOST` needs `SAFEWATCH_ALLOW_NETW
 | Independent security review, fuzzing of the media parsers, penetration test | [N] |
 | Cross-site deployment (SPA and API on different sites) | unsupported |
 | Behaviour after a hard crash leaves orphan tools until they finish | [P] documented, not fixable in-process |
+
+## 33. YouTube player integration (Checkpoint 11)
+
+**What this is, in one sentence.** A user can paste a YouTube link, watch the video in YouTube's own embedded player inside SafeWatch, and, if they supply a caption file, get phrase warnings, skip and mute for it. **It is not video analysis**: SafeWatch can neither hear nor see an embedded YouTube video, and no permitted way to get the audio, the frames or YouTube's captions for someone else's video exists. The local-file workflow (§§3-32) is unchanged and remains the only path with speech recognition.
+
+Status labels: **[T]** implemented and tested · **[V]** verified in a real browser against real YouTube · **[N]** not implemented / not possible · **[G]** needs a decision or authorisation.
+
+### 33.1 Feasibility (sources: the official IFrame Player API reference, Player Parameters, `captions.download` reference and the YouTube API Services Developer Policies, read on the day of implementation)
+
+| Capability | Available? | Basis |
+| --- | --- | --- |
+| Embedded playback with YouTube's controls, branding and ads | Yes | IFrame Player API (`YT.Player`) |
+| Playback position, duration, state, playback rate | Yes, read-only | `getCurrentTime()`, `getDuration()`, `getPlayerState()`, `getPlaybackRate()`, `onStateChange`, `onPlaybackRateChange` |
+| Seek and mute/unmute by the page | Yes | `seekTo(seconds, allowSeekAhead)`, `mute()`, `unMute()`, `isMuted()` (documented methods) |
+| Error reporting | Yes | `onError`: 2 invalid parameter, 5 HTML5 error, 100 not found/removed/private, 101 and 150 embedding not allowed, 153 missing referer/client identification |
+| Public metadata (title and so on) | Not used | Not needed; no extra request is made |
+| Caption TEXT | **No** | The player API exposes only caption font size and a reload switch (`captions` module); it returns no text. `captions.download` requires OAuth with edit permission on the video, i.e. the owner (scopes `youtube.force-ssl` / `youtubepartner`). Unofficial caption endpoints or scrapers are not used (policy III.E.6 forbids scraping; III.I.14 forbids non-API access to API data) |
+| Audio of the video | **No** | The embedded player gives the page no audio stream; downloading or separating it is prohibited (III.E.1.a download/cache/store; III.I.7 separate, isolate or modify audio/video components) |
+| Frames / picture | **No** | Same; the page cannot read a cross-origin iframe's pixels, and capturing the screen would be an unauthorised extraction |
+| Thumbnails, titles, tags as evidence | Not used | They are not evidence of what happens in the video; SafeWatch never invents findings from them |
+| Mute/skip by the page | Allowed by the API; no policy rule names it | III.I.6 forbids modifying or blocking the player's functionality, III.I.7 forbids modifying audio/video components, III.F.2.c/I.4 forbid obscuring attribution or links. Calling the documented `mute()`/`seekTo()` is using the player, not editing the audio, but the policy does not address it explicitly: **[G]** keep default = no action, require the user's choice, and re-check with YouTube before any public release |
+
+**Therefore the only analysis input that is both permitted and real is text the user supplies** (an `.srt`/`.vtt` file they already have: they own the video, or the creator shared it). SafeWatch labels it as such everywhere.
+
+### 33.2 Architecture [T]
+
+```
+ paste link ─► parseYouTubeUrl (strict) ─► videoId (11 chars, nothing else is kept)
+                                              │
+              YouTubePlayer (official IFrame API, privacy-enhanced host, no autoplay) ─► YouTubeDriver ──┐
+                                                                                                           │ PlaybackDriver
+ caption file (.srt/.vtt, read in the browser) ─► parseCaptionFile ─► analyzeCaptions ─► SafetyAnalysis ──┤ (same interface a <video> uses)
+        │   same context builder + same flagged-term classifier as local files                            ▼
+        └── discovery stamps (late / missed)                          PlaybackShell = findings, actions, warnings, preferences, feedback
+                                                                      (extracted from PlaybackPanel; the CP8 coordinator and CP9 scheduler, unchanged)
+```
+
+- **No second engine.** `analyzeCaptions` builds a subtitle track and calls the existing `buildContextAnalysis` and `analyzeSafety`. The playback side is the CP8 `PlaybackCoordinator` and CP9 `WarningScheduler`, now bound to a `PlaybackDriver` (a small interface: surface, listen, isPlaying). A `<video>` and the YouTube player are two drivers. The existing local-file tests pass unchanged.
+- **`src/domain/youtube`:** `url.ts` (strict parsing), `captions.ts` (SRT/WebVTT, bounded: 2 MB, 20 000 cues), `analysis.ts`, `sourceState.ts` (state machine and capability list), `discovery.ts` (late/missed). All pure.
+- **`src/infrastructure/youtube`:** `iframeApi.ts` (loads `https://www.youtube.com/iframe_api` once per page and only when a video is first loaded; shared promise, one script element, a failure removes the script and allows a retry, a pre-existing `onYouTubeIframeAPIReady` is preserved), `youtubeDriver.ts`.
+- **`src/features/youtube`:** `YouTubePlayer` (one player per id; destroys it, its timers and listeners when the id changes or the component goes away; ready-timeout 20 s), `YouTubePanel`, `SourceSelector` (tabs; only the chosen source is mounted, so nothing keeps playing in the background and no state leaks across sources).
+
+### 33.3 State model [T]
+
+Player: `idle → source-validated → player-loading → player-ready | player-error(kind)`. Analysis: `unavailable → pending → in-progress → partial | complete | failed`. Findings never appear without a finished analysis. **`complete` is unreachable today**: a finished analysis is `partial` unless the caller explicitly claims full coverage, and no YouTube source can (captions may be incomplete or wrong; there is no speech or picture source). The interface lists, per capability, its source, access method and limits (`youTubeCapabilities`): phrases in captions (available with a file), phrases in speech (unavailable), scene categories (not supported), warnings and actions (available only after an analysis).
+
+### 33.4 The YouTube driver [T][V]
+
+The API has no time-update or seek event, so the driver polls the position every 250 ms while someone listens (like a `<video>`'s `timeupdate`), maps `onStateChange` to the coordinator's signals, treats everything except PLAYING (buffering, cued, ended, paused, unstarted) as "not advancing", reports a seek the page asked for as `seeked` once the playhead lands (or after 1.5 s), and notices a user's mute change by comparing readings. Before ready every reading is neutral and every command is ignored; a player that throws gives neutral readings. The only commands it sends are `seekTo` and `mute`/`unMute`; it never touches the volume, the picture, the controls, the branding or advertisements, and nothing is drawn over the player (warnings appear in the reserved slot under it).
+
+Real-browser evidence (Chromium in the desktop app, public video "Big Buck Bunny", Blender Foundation, id `aqz-KE-bpKQ`; the caption cues were my own synthetic test cues, not YouTube's):
+
+- The embed is served from `https://www.youtube-nocookie.com/embed/<id>?enablejsapi=1&origin=…&autoplay=0&playsinline=1&rel=0&fs=1`: the `host` option is honoured; the iframe title is set; 424×238 px on a 458 px viewport, 286×200 px at 320 px.
+- Warnings appeared while the real video played (about 20 s ahead, visible about 3 s); with the cue at 9 s the warning said "about 9 seconds" because the cue is early in the video.
+- **Skip:** from 0:09.00 to 0:12.00 executed through `seekTo`. **Mute:** the real player's `isMuted()` turned true at playhead 71.05 s for a cue starting at 71.00 s and false at 76.02 s for a cue ending at 76.00 s (sampled every 50 ms). Sound state was restored.
+- Captions added while the video was at 58 s: the banner "1 finding was found less than 20 seconds before it starts, so its warning is late" appeared.
+- A nonexistent id returned error 150/101, which SafeWatch reports as "This video cannot be played here" with all the possible reasons (the API gives the same answer for "owner disallows embedding" and, as seen, for a missing video).
+- A new link cleared the captions, findings and stages of the previous one.
+- **Not verified live:** a video whose owner disallows embedding (none was identified), a private video, age-restricted or region-blocked videos, live streams, Shorts playback, and advertisements. See 33.8.
+
+### 33.5 Privacy and policy [T for the code paths; the policy reading is not legal advice]
+
+- **Requests to YouTube** happen only after a valid link is submitted: `www.youtube.com` (the API script `iframe_api` and the widget script) and `www.youtube-nocookie.com` (the player iframe, privacy-enhanced mode). From then on YouTube receives the usual player information (IP address, browser details, the embedding page's address, cookies it sets) under its terms. Autoplay is off; the player is not started by the page. The player then talks to YouTube and Google video domains on its own: SafeWatch cannot see or limit that. The page discloses this before the first load.
+- **Not sent anywhere:** the user's phrases, the caption file, the findings and preferences. In YouTube mode SafeWatch makes no request to the SafeWatch server either (tested: `fetch` is never called). The caption text is read with `File.text()` in the browser and kept in memory for this video only.
+- **No stored or copied YouTube content:** nothing is downloaded, recorded, cached, separated or re-encoded. The repository contains no YouTube screenshots or video for the same reason.
+- **Content-Security-Policy:** the SPA currently has no CSP (unchanged, finding F12), so nothing was weakened. A deployment that adds one must allow: `script-src https://www.youtube.com https://s.ytimg.com`, `frame-src https://www.youtube-nocookie.com https://www.youtube.com`, `img-src https://i.ytimg.com`, `connect-src 'self'`. The IFrame API (as seen in testing) loads `www-widgetapi.js` from `www.youtube.com`.
+- **Origin checks:** the player is given `origin = window.location.origin`; the SafeWatch API is not involved and its Host/Origin/session controls (§32) are untouched. The embed address is built from the validated 11-character id only; arbitrary iframe, script and host URLs are rejected by the parser (tests for 40+ malformed, hostile and look-alike inputs).
+- **Policy points to keep checking** (III.E.1, III.F.2.c, III.I.4-7): no download/cache, no obscuring of attribution/links/ads, no modification of player functionality. Automatic mute/skip is the one area the policy does not explicitly address.
+
+### 33.6 Warnings, late and missed findings [T][V]
+
+Warnings are scheduled only from real timestamped findings (cue times exact). Each finding is stamped with the playhead when it was first found. Found at least the lead time before it starts (or before playback began): normal. Found closer than the lead time: **late**, the warning says so ("Found late: the captions were checked when playback was already close to this") and the page banners it. Found after it started: **missed**: no warning is possible and the page says so; it is never presented as an advance warning. Seeking, pausing, buffering, rate changes (the scheduler uses media time ÷ rate), video changes and ending are handled by the unchanged CP9 scheduler (38 tests) and by 9 driver-level integration tests with a fake YouTube player.
+
+### 33.7 Source switching and cleanup [T]
+
+Only the selected source is mounted. Leaving YouTube destroys the player and removes the timers (tested: `destroyed`, no timer left). A new link starts from nothing. `Stop and clear` and unmount do the same. React StrictMode's double effect leaves one live player. A rejected link keeps the current video.
+
+### 33.8 Limitations and open items
+
+- No speech and no scene analysis for YouTube, and none is possible through permitted means. To check speech, use the local file option.
+- The caption file may be incomplete or belong to a different cut of the video; SafeWatch cannot verify it. Offsets between a caption file and the video are not corrected.
+- Advertisements: the IFrame API can report ad playback as video playback (position and duration of the ad). Not tested; if ads run, warnings and actions could be mis-timed. **Open [G].**
+- Mute silences the whole player (no audio-only muting exists); user mute changes made inside the player are noticed within ~250 ms.
+- Skip lands where `seekTo` lands (keyframes); the coordinator retries up to 3 times as for files.
+- Live streams (duration 0) and videos YouTube refuses to embed are not supported.
+- The player's own controls (captions, speed, quality) are YouTube's; a change of captions inside the player does not change what SafeWatch checks.
+- Small controls inherited from the playback panel (selects 28 px, checkboxes 20 px at 320 px) are below the 44 px target size (pre-existing, finding B4).
+- **Decisions needed:** (1) whether automatic mute/skip on YouTube is acceptable for the intended distribution (policy not explicit); (2) whether owner-authorised captions (OAuth, `captions.download`) are wanted for users' own videos; that needs a Google Cloud project and a consent screen; (3) whether to keep supporting caption files with no way to verify them.

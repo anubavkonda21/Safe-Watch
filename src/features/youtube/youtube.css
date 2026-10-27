@@ -1,0 +1,37 @@
+.sw-yt-panel { width: 100%; max-width: 520px; margin-inline: auto; display: grid; gap: var(--sw-s-3); justify-items: stretch; text-align: left; }
+.sw-yt-panel > .sw-badge { justify-self: center; }
+.sw-yt-panel > .sw-h3 { text-align: center; }
+.sw-yt-panel > .sw-body-sm:first-of-type { text-align: center; }
+.sw-yt-form { display: grid; gap: var(--sw-s-2); }
+.sw-yt-form__row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sw-s-2); align-items: stretch; }
+.sw-yt-error { color: var(--sw-danger); overflow-wrap: anywhere; }
+.sw-yt-disclosure { border-left: 2px solid var(--sw-border-hover); padding-left: var(--sw-s-3); }
+.sw-yt-stages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sw-s-2); }
+.sw-yt-stage { display: grid; gap: 2px; padding: var(--sw-s-2) var(--sw-s-3); border: 1px solid var(--sw-border); border-radius: var(--sw-r-control); min-width: 0; overflow-wrap: anywhere; }
+.sw-yt-stage.is-done { border-color: var(--sw-success); }
+.sw-yt-stage.is-active { border-color: var(--sw-accent-border); }
+.sw-yt-stage.is-problem { border-color: var(--sw-danger); }
+/* The player keeps a 16:9 box whose INNER height is at least YouTube's 200 px minimum (202 px with the 1 px borders); nothing is drawn over it. */
+.sw-yt { width: 100%; aspect-ratio: 16 / 9; min-height: 202px; background: #000; border-radius: var(--sw-r-control); border: 1px solid var(--sw-border); overflow: hidden; }
+.sw-yt iframe { display: block; width: 100%; height: 100%; border: 0; }
+.sw-yt-alert-actions { display: block; margin-top: var(--sw-s-2); }
+.sw-yt-discovery { padding: var(--sw-s-3); border: 1px solid var(--sw-warning); border-radius: var(--sw-r-control); }
+.sw-yt-captions, .sw-yt-caps { display: grid; gap: var(--sw-s-2); }
+.sw-yt-caps__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sw-s-3); }
+.sw-yt-cap { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--sw-s-1) var(--sw-s-2); align-items: start; }
+.sw-yt-cap > p { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.sw-yt-panel .sw-btn { white-space: normal; max-width: 100%; text-align: center; }
+.sw-yt-panel .sw-playback { max-width: 100%; }
+@media (max-width: 420px) {
+  .sw-yt-form__row { grid-template-columns: minmax(0, 1fr); }
+  .sw-yt-stages { grid-template-columns: minmax(0, 1fr); }
+}
+
+.sw-source { display: grid; gap: var(--sw-s-4); justify-items: center; }
+.sw-source__tabs { display: inline-flex; gap: var(--sw-s-1); padding: var(--sw-s-1); border: 1px solid var(--sw-border); border-radius: var(--sw-r-button); background: var(--sw-surface); max-width: 100%; }
+.sw-source__tab { min-height: var(--sw-touch); padding: 0 var(--sw-s-5); border: 0; border-radius: var(--sw-r-control); background: transparent; color: var(--sw-text-2); font: inherit; font-weight: 600; font-size: 15px; cursor: pointer; }
+.sw-source__tab:hover { color: var(--sw-text); }
+.sw-source__tab.is-active { background: var(--sw-accent); color: var(--sw-on-accent); }
+.sw-source__panel { width: 100%; display: grid; justify-items: center; }
+.sw-source__panel > * { max-width: 100%; }
+@media (prefers-reduced-motion: no-preference) { .sw-source__tab { transition: background-color var(--sw-t-fast) var(--sw-ease), color var(--sw-t-fast) var(--sw-ease); } }

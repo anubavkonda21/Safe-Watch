@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 11 — YouTube player.** Paste a YouTube link (watch, youtu.be or Shorts) and watch the video in YouTube's own embedded player inside SafeWatch. If you have a caption file for that video (SRT or WebVTT), SafeWatch checks your phrases against it and gives the same advance warnings, Skip/Ignore, mute and skip as for a local file. **SafeWatch cannot hear or see an embedded YouTube video**: YouTube gives the page no audio, no picture and no caption text (only the video's owner can download captions), and downloading them is not allowed. So for YouTube there is no speech recognition and no scene detection; use the local file option for speech. Loading a video contacts YouTube. See `CHECKPOINT_11_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §33.
+
 **Checkpoint 10 — security hardening (single-user, macOS, loopback only).** The API now has per-browser sessions with media ownership checks, Host/Origin protections, rate limits, a disk quota, a macOS sandbox for FFmpeg, FFprobe, whisper.cpp and the Vision helper, process-group termination and a clean shutdown. **This is not a general production-ready release**: there is no sandbox on Linux or Windows, no TLS, no real user accounts, no encryption at rest, no CSP. See `CHECKPOINT_10_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.
 
 **Checkpoint 9 — complete product experience.** The playback panel now warns you shortly before a supported finding (default 20 s ahead, shown for 3 s), with **Skip** and **Ignore** buttons that reuse the Checkpoint 8 actions; ignoring the warning does nothing. Your flagged-term list can be added to, edited and removed with a clear saved / active / not-yet-applied state, and playback preferences (warnings on or off, lead time, visible time, default action) are saved in this browser after validation. You can report a missed finding (stored only in this browser, never sent, never used to train anything) and the page explains plainly what was analyzed and why a finding may be unavailable. **Still only flagged terms in speech and subtitles are detected.** No sexual, violence, graphic or drug detection exists, there is no safety score, and a result without findings does not mean a video is safe. See `CHECKPOINT_9_REPORT.md`.
@@ -255,6 +257,16 @@ Supported setup: one person, one macOS machine, API on `127.0.0.1`, SPA and API 
 - **Fonts:** Inter v4.1 is self-hosted (`public/fonts/InterVariable.woff2`, SIL Open Font License 1.1 in `public/fonts/Inter-LICENSE.txt`), so a page load contacts no third-party server (verified in the browser: the only origin is the app itself). Until Checkpoint 10's follow-up it loaded Google Fonts.
 - **Checks:** `npm audit` (0 vulnerabilities after the vite 8.3.5 lockfile update) and the `server/test/security*.test.ts` suites.
 
+## YouTube videos (Checkpoint 11)
+
+- **Use:** choose the **YouTube** tab under "Start with a video", paste a link and press **Load video**. Supported: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/shorts/…`. Playlists, channels, embed links and live pages are rejected. The video never starts by itself.
+- **What is analysed:** only a caption file you add yourself (`.srt` or `.vtt`, up to 2 MB, read in your browser and never sent anywhere). Your phrases are matched against it with the same matcher as local files; findings are shown with exact cue times. The analysis is always labelled **partial**: captions may be incomplete or wrong, nothing is heard and nothing is seen.
+- **What is not possible:** speech recognition, scene categories (sexual content, violence, graphic injury, drugs), reading YouTube's own captions. Reasons and the policy basis are in §33.1.
+- **Warnings, skip, mute:** the same engine as local files (20 s ahead, 3 s visible by default, choices default to "no action"). Skip uses the player's `seekTo`, mute uses its `mute()` / `unMute()` (it silences the whole player). Findings found after playback has passed them are reported as missed, close ones as late.
+- **Privacy:** requests to `www.youtube.com` and `www.youtube-nocookie.com` begin only when you press Load video; YouTube sees the usual player information (IP address, browser details) under its own policy. Your phrases, caption file and findings are not sent to YouTube or to the SafeWatch server. SafeWatch stores no YouTube content. If you deploy with a Content-Security-Policy, allow those two hosts (see §33.5).
+- **Setup:** nothing new (no API key, no account, no environment variable). The YouTube option needs internet access to YouTube; the local-file option does not.
+- **Known limits:** advertisements and some restricted videos were not tested; see §33.8.
+
 ## Technology stack
 
 - **Vite + React 19 + TypeScript (strict)** — SPA with fast tooling.
@@ -297,7 +309,7 @@ npm run dev
 
 ## Roadmap
 
-See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 18).
+See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 19).
 
 ## Development workflow
 

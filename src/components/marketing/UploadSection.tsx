@@ -1,6 +1,7 @@
 import { Container } from '@/components/ui/Container';
 import { ProductGuide } from '@/features/upload/ProductGuide';
 import { UploadDropzone } from '@/features/upload/UploadDropzone';
+import { SourceSelector } from '@/features/youtube/SourceSelector';
 
 export function UploadSection() {
   return (
@@ -10,8 +11,7 @@ export function UploadSection() {
           <h2 id="analyze-title" className="sw-h1">Start with a video</h2>
           <p className="sw-body-lg sw-muted">The first step of the analysis workflow.</p>
         </div>
-        <UploadDropzone />
-        <ProductGuide />
+        <SourceSelector local={<><UploadDropzone /><ProductGuide /></>} />
       </Container>
     </section>
   );

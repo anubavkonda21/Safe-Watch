@@ -6,6 +6,8 @@ import type { ActiveWarning } from '@/domain/warnings/scheduler';
 
 interface Props {
   warning: ActiveWarning;
+  /** An extra sentence for this warning, or null. */
+  note?: string | null;
   /** How long it stays when untouched (for the lifetime indicator). */
   durationMs: number;
   onSkip: () => void;
@@ -45,7 +47,7 @@ const planOf = (w: ActiveWarning): string | null => {
  * same CP8 choices as the list below. Expiring or being dismissed does nothing to playback and is not consent. It is not a
  * judgement, shows no score or confidence, and never takes focus from the player.
  */
-export function UpcomingWarning({ warning, durationMs, onSkip, onIgnore, onDismiss, onHold, onRelease }: Props) {
+export function UpcomingWarning({ warning, note = null, durationMs, onSkip, onIgnore, onDismiss, onHold, onRelease }: Props) {
   const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); onDismiss(); } };
   // Keep it while the pointer or keyboard focus is on it (users need time to act); resume when both have left.
   const leave = (e: FocusEvent<HTMLDivElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) onRelease(); };
@@ -54,7 +56,7 @@ export function UpcomingWarning({ warning, durationMs, onSkip, onIgnore, onDismi
     <div className="sw-warn" role="group" aria-label="Upcoming flagged phrase" onMouseEnter={onHold} onMouseLeave={onRelease} onFocus={onHold} onBlur={leave}>
       <div className="sw-warn__body">
         <p className="sw-body-sm sw-warn__title">{warningTitle(warning)}</p>
-        <p className="sw-caption sw-muted sw-warn__detail">{warningPhrases(warning)} {warningWhen(warning)}{plan ? ` ${plan}` : ''}</p>
+        <p className="sw-caption sw-muted sw-warn__detail">{warningPhrases(warning)} {warningWhen(warning)}{plan ? ` ${plan}` : ''}{note ? ` ${note}` : ''}</p>
       </div>
       <div className="sw-warn__actions">
         <Button onClick={onSkip} onKeyDown={key}>Skip</Button>
