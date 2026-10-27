@@ -37,8 +37,9 @@ interface UploadDropzoneProps {
 }
 
 /**
- * Entry point of the analysis workflow. Selects a video, validates it, and
- * prepares a MediaAsset locally. Nothing is uploaded and no analysis runs.
+ * The local-file source. Selects a video, validates it, and (with the server backend) uploads it to the SafeWatch server, which
+ * checks it with local tools and deletes it after a limited time. In the browser-only mode (VITE_MEDIA_BACKEND=browser) it only
+ * reads the file's details locally: nothing is uploaded and no analysis runs.
  */
 export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = config.maxUploadBytes, disabled = false }: UploadDropzoneProps) {
   const { state, select, playbackFile } = useMediaIngestion(ingestion);
@@ -145,7 +146,7 @@ export function UploadDropzone({ ingestion = defaultMediaIngestion, maxBytes = c
       <p className="sw-sr-only" role="status" aria-live="polite">
         {state.status === 'validating' && 'Checking your file'}
         {state.status === 'processing' && (state.phase === 'uploading' ? 'Uploading your video' : 'Preparing your media')}
-        {state.status === 'ready' && `Media ready: ${state.asset.filename}. Analysis has not started.`}
+        {state.status === 'ready' && `Media ready: ${state.asset.filename}.${ingestion.mode === 'server' ? '' : ' Analysis has not started.'}`}
         {state.status === 'failed' && errorCopy(state.failure.code, maxBytes).title}
       </p>
     </div>
@@ -241,7 +242,7 @@ function AssetSummary({ asset, headingId, hintId, status, phase, uploadFraction,
         <div className="sw-upload__alert">
           <Alert tone="info" title={mode === 'server' ? 'Stored temporarily' : 'Analysis has not started'}>
             {mode === 'server'
-              ? 'Your video was uploaded to the SafeWatch server and is deleted automatically. Only flagged-word checks exist so far; a full safety analysis arrives in a later release.'
+              ? 'Your video was uploaded to your SafeWatch server and is deleted automatically. SafeWatch checks only the words and phrases you list; other categories are not supported.'
               : 'This file stays on your device. A full safety analysis arrives in a later release.'}
           </Alert>
         </div>

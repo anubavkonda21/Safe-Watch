@@ -1,11 +1,12 @@
 import { Badge } from '@/components/ui/Badge';
 import { Container } from '@/components/ui/Container';
 
+/** The real flow, step by step. Every step works today; where it differs between a file and a YouTube link, the step says so. */
 const STEPS = [
-  { title: 'Upload', body: 'Choose a video from your device.', status: 'preview' },
-  { title: 'Analyze', body: 'Speech, subtitles and frames are processed.', status: 'planned' },
-  { title: 'Review', body: 'See a safety timeline and pre-playback summary.', status: 'planned' },
-  { title: 'Watch', body: 'Play with your filters applied.', status: 'planned' },
+  { title: 'Choose', body: 'Pick a video file from your device, or paste a YouTube link. Add the words or phrases you want to find.', note: 'Works for both' },
+  { title: 'Check', body: 'For a file, your words are matched against its speech and subtitles. For YouTube, against a caption file you add: SafeWatch cannot hear or see a YouTube video.', note: 'Speech: files only' },
+  { title: 'Review', body: 'Matches are listed with their times and how exact those times are. There is no score and no verdict.', note: 'Works for both' },
+  { title: 'Watch', body: 'Optional warnings, mute or skip while you watch. Nothing happens unless you choose it.', note: 'Works for both' },
 ] as const;
 
 export function HowItWorks() {
@@ -14,7 +15,7 @@ export function HowItWorks() {
       <Container>
         <div className="sw-section__head">
           <h2 id="how-title" className="sw-h1">How it works</h2>
-          <p className="sw-body-lg sw-muted">The intended flow. Only the first step has a preview today.</p>
+          <p className="sw-body-lg sw-muted">What happens today, step by step.</p>
         </div>
         <ol className="sw-steps">
           {STEPS.map((s, i) => (
@@ -22,7 +23,7 @@ export function HowItWorks() {
               <span className="sw-step__num">{String(i + 1).padStart(2, '0')}</span>
               <h3 className="sw-h3">{s.title}</h3>
               <p className="sw-body-sm sw-muted">{s.body}</p>
-              <Badge tone={s.status === 'preview' ? 'accent' : 'neutral'}>{s.status}</Badge>
+              <Badge tone="accent">{s.note}</Badge>
             </li>
           ))}
         </ol>

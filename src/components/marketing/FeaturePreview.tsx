@@ -4,10 +4,11 @@ import { Card } from '@/components/ui/Card';
 import { Container } from '@/components/ui/Container';
 import { ControlIcon, DetectIcon, UnderstandIcon } from '@/components/ui/icons';
 
+/** What the product does today, in the words the rest of the interface uses. Nothing here is planned work. */
 const FEATURES: ReadonlyArray<{ icon: ReactNode; title: string; body: string }> = [
-  { icon: <UnderstandIcon />, title: 'Understand', body: 'Reads speech, subtitles and scenes together, so context decides what a moment really is.' },
-  { icon: <DetectIcon />, title: 'Detect', body: 'Finds the moments that matter to you and places them on a timeline before you press play.' },
-  { icon: <ControlIcon />, title: 'Control', body: 'Mute, mask or skip what you choose. Your policy decides, not a one-size-fits-all rating.' },
+  { icon: <DetectIcon />, title: 'Find', body: 'Finds your words and phrases in the speech of a video file (recognised on your own machine, when speech recognition is set up) and in its subtitles, or in a caption file you add for a YouTube video.' },
+  { icon: <UnderstandIcon />, title: 'Warn', body: 'Shows a heads-up about 20 seconds before a match, and says plainly when a match was found too late to warn in time.' },
+  { icon: <ControlIcon />, title: 'Control', body: 'Mutes or skips a match while you watch, but only if you choose it. By default nothing happens.' },
 ];
 
 export function FeaturePreview() {
@@ -15,8 +16,9 @@ export function FeaturePreview() {
     <section id="product" className="sw-section" aria-labelledby="product-title">
       <Container>
         <div className="sw-section__head">
-          <Badge>Planned capabilities</Badge>
-          <h2 id="product-title" className="sw-h1">Three ideas, one player</h2>
+          <Badge>Early version</Badge>
+          <h2 id="product-title" className="sw-h1">What it does today</h2>
+          <p className="sw-body-lg sw-muted">Not supported: detecting sexual content, violence, graphic injury or drug-related scenes. SafeWatch does not do this.</p>
         </div>
         <ul className="sw-features">
           {FEATURES.map((f) => (

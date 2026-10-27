@@ -6,6 +6,8 @@ SafeWatch is intended to become a premium AI-powered media-safety platform: it u
 
 ## Current status
 
+**Checkpoint 12 — truthful interface and accessibility pass.** The landing page no longer makes claims the application contradicts (it used to say nothing is uploaded and that scenes are analysed); it now states where a file, a YouTube link and your words go, and what is not supported. Touch targets are at least 44 px (one documented exception), measured in a real browser at 320, 375, 768 and 1280 px, with an axe-core scan and keyboard checks. No screen reader was used and accessibility compliance is not claimed. See `CHECKPOINT_12_REPORT.md`.
+
 **Checkpoint 11 — YouTube player.** Paste a YouTube link (watch, youtu.be or Shorts) and watch the video in YouTube's own embedded player inside SafeWatch. If you have a caption file for that video (SRT or WebVTT), SafeWatch checks your phrases against it and gives the same advance warnings, Skip/Ignore, mute and skip as for a local file. **SafeWatch cannot hear or see an embedded YouTube video**: YouTube gives the page no audio, no picture and no caption text (only the video's owner can download captions), and downloading them is not allowed. So for YouTube there is no speech recognition and no scene detection; use the local file option for speech. Loading a video contacts YouTube. See `CHECKPOINT_11_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §33.
 
 **Checkpoint 10 — security hardening (single-user, macOS, loopback only).** The API now has per-browser sessions with media ownership checks, Host/Origin protections, rate limits, a disk quota, a macOS sandbox for FFmpeg, FFprobe, whisper.cpp and the Vision helper, process-group termination and a clean shutdown. **This is not a general production-ready release**: there is no sandbox on Linux or Windows, no TLS, no real user accounts, no encryption at rest, no CSP. See `CHECKPOINT_10_REPORT.md` and `SAFEWATCH_MEDIA_ARCHITECTURE.md` §32.
@@ -309,7 +311,7 @@ npm run dev
 
 ## Roadmap
 
-See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 19).
+See `SAFEWATCH_ROADMAP.md` (Checkpoints 0A → 20).
 
 ## Development workflow
 

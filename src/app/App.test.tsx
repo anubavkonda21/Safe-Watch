@@ -20,15 +20,15 @@ describe('application boot', () => {
   it('exposes the primary navigation and CTA', () => {
     renderAt('/');
     const nav = screen.getByRole('navigation', { name: 'Primary' });
-    for (const name of ['Product', 'How it works', 'Safety', 'About']) {
+    for (const name of ['Product', 'How it works', 'Privacy', 'About']) {
       expect(nav).toHaveTextContent(name);
     }
     expect(screen.getAllByRole('link', { name: 'Analyze a Video' })[0]).toHaveAttribute('href', '#analyze');
   });
 
-  it('renders the three capability cards', () => {
+  it('renders the three cards of what the product does today', () => {
     renderAt('/');
-    for (const t of ['Understand', 'Detect', 'Control']) {
+    for (const t of ['Find', 'Warn', 'Control']) {
       expect(screen.getByRole('heading', { level: 3, name: t })).toBeInTheDocument();
     }
   });

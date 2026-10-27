@@ -136,8 +136,10 @@ describe('Custom filters UI', () => {
     render(<CustomFiltersSection />);
     const note = screen.getByText(/Your list is saved in this browser/);
     expect(note).toHaveTextContent('the enabled phrases are sent to your SafeWatch server');
-    expect(note).toHaveTextContent('does not store or log them, and nothing is sent to anyone else');
-    expect(document.body.textContent).not.toMatch(/never (sent|leave)|stay in this browser/i);
+    expect(note).toHaveTextContent('does not store or log them');
+    expect(note).toHaveTextContent('For a YouTube video the matching happens in this browser and nothing goes to the server');
+    expect(note).toHaveTextContent('never sent to YouTube or to anyone else');
+    expect(document.body.textContent).not.toMatch(/never leave|never sent anywhere|never sent to (the )?(server|SafeWatch)|stay in this browser/i);
   });
 
   describe('editing', () => {
@@ -235,7 +237,7 @@ describe('Custom filters UI', () => {
     });
     it('never says the model learns, and never says phrases stay on the device', () => {
       render(<CustomFiltersSection />);
-      expect(document.body.textContent).not.toMatch(/will learn|teaches the model|stay on this device|never leave|never sent/i);
+      expect(document.body.textContent).not.toMatch(/will learn|teaches the model|stay on this device|never leave|never sent anywhere|never sent to (the )?(server|SafeWatch)/i);
       expect(document.body.textContent).toContain('does not learn new ideas from your list');
     });
   });

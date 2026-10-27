@@ -1,6 +1,6 @@
 /**
- * Decorative illustration of the intended product: a video frame, a timeline
- * with detected moments, and signal lanes. It is illustrative, not real data.
+ * Decorative illustration only: a video frame, a timeline with marked moments and signal lanes. It is not real data, and it shows more
+ * lanes than SafeWatch has today (nothing is detected from the picture or from context).
  */
 const LANES = [
   { label: 'Speech', marks: [18, 42, 67], tone: 'info' },
@@ -10,7 +10,7 @@ const LANES = [
 
 export function AnalysisVisual() {
   return (
-    <figure className="sw-visual" aria-label="Illustration: a video timeline with moments flagged by analysis">
+    <figure className="sw-visual" aria-label="Illustration only: a video timeline with marked moments. Not real results.">
       <div className="sw-visual__frame" aria-hidden="true">
         <div className="sw-visual__scene" />
         <span className="sw-visual__scan" />
@@ -29,7 +29,7 @@ export function AnalysisVisual() {
         ))}
         <span className="sw-visual__playhead" />
       </div>
-      <figcaption className="sw-caption sw-visual__caption">Illustrative preview</figcaption>
+      <figcaption className="sw-caption sw-visual__caption">Illustration only, not a real result. SafeWatch does not detect scenes today.</figcaption>
     </figure>
   );
 }

@@ -5,7 +5,7 @@ export function Footer() {
     <footer className="sw-footer">
       <Container className="sw-footer__row">
         <span>© {new Date().getFullYear()} SafeWatch</span>
-        <span>Early foundation — analysis features are not yet available.</span>
+        <span>Early version: it checks only the words and phrases you list.</span>
       </Container>
     </footer>
   );

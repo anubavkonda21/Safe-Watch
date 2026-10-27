@@ -9,7 +9,7 @@ export function UploadSection() {
       <Container>
         <div className="sw-section__head sw-section__head--center">
           <h2 id="analyze-title" className="sw-h1">Start with a video</h2>
-          <p className="sw-body-lg sw-muted">The first step of the analysis workflow.</p>
+          <p className="sw-body-lg sw-muted">Choose a video file from your device, or paste a YouTube link.</p>
         </div>
         <SourceSelector local={<><UploadDropzone /><ProductGuide /></>} />
       </Container>

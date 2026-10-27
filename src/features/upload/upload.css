@@ -46,7 +46,7 @@
 .sw-xstep.is-active .sw-xstep__mark { border-color: var(--sw-accent-border); color: var(--sw-accent-hover); }
 .sw-xstep .sw-spinner { width: 10px; height: 10px; border-width: 1.5px; }
 .sw-details { border: 1px solid var(--sw-border); border-radius: var(--sw-r-card); background: var(--sw-bg-2); }
-.sw-details > summary { cursor: pointer; padding: var(--sw-s-3) var(--sw-s-4); color: var(--sw-text-2); list-style-position: inside; border-radius: var(--sw-r-card); }
+.sw-details > summary { cursor: pointer; min-height: var(--sw-touch); box-sizing: border-box; padding: 12px var(--sw-s-4); color: var(--sw-text-2); list-style-position: inside; border-radius: var(--sw-r-card); }
 .sw-details > summary:hover { color: var(--sw-text); }
 .sw-details__body { display: grid; gap: var(--sw-s-2); padding: 0 var(--sw-s-4) var(--sw-s-4); }
 .sw-details__body h4 { margin: var(--sw-s-2) 0 0; }
@@ -116,7 +116,7 @@
   position: absolute; height: 18px; min-width: 8px; padding: 0; cursor: pointer; border-radius: 4px;
   border: 1px solid var(--sw-text-muted); background: color-mix(in srgb, var(--sw-text-muted) 40%, transparent);
 }
-.sw-cseg::before { content: ''; position: absolute; inset: -4px -8px; } /* larger touch target than the drawn segment */
+.sw-cseg::before { content: ''; position: absolute; inset: -4px -8px; } /* a little larger than the drawn segment; lanes are 26 px apart, so this is NOT 44 px: every segment is also a full-size entry in the list below */
 .sw-cseg--multi-source { background: color-mix(in srgb, var(--sw-accent) 50%, transparent); border-color: var(--sw-accent-hover); }
 .sw-cseg.is-extended { background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgb(255 255 255 / 0.12) 4px 8px); }
 .sw-cseg:hover { border-color: var(--sw-text-muted); }
@@ -157,11 +157,11 @@
 .sw-cat.is-evaluated, .sw-cat.is-partial { border-color: var(--sw-accent-border); }
 .sw-cat__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sw-s-2); }
 .sw-cat__name { font-weight: 500; }
-.sw-cat .sw-details > summary { padding: var(--sw-s-1) var(--sw-s-2); }
+.sw-cat .sw-details > summary { padding: 12px var(--sw-s-2); }
 .sw-cat .sw-details__body { gap: var(--sw-s-1); padding: 0 var(--sw-s-2) var(--sw-s-2); }
-.sw-ftimeline { position: relative; width: 100%; height: 32px; background: var(--sw-bg-2); border: 1px solid var(--sw-border); border-radius: var(--sw-r-control); overflow: hidden; }
-.sw-fmark { position: absolute; top: 7px; height: 16px; min-width: 8px; padding: 0; cursor: pointer; border-radius: 4px; border: 1px solid var(--sw-accent-hover); background: color-mix(in srgb, var(--sw-accent) 55%, transparent); }
-.sw-fmark::before { content: ''; position: absolute; inset: -8px -8px; }
+.sw-ftimeline { position: relative; width: 100%; height: var(--sw-touch); background: var(--sw-bg-2); border: 1px solid var(--sw-border); border-radius: var(--sw-r-control); overflow: hidden; }
+.sw-fmark { position: absolute; top: 14px; height: 16px; min-width: 8px; padding: 0; cursor: pointer; border-radius: 4px; border: 1px solid var(--sw-accent-hover); background: color-mix(in srgb, var(--sw-accent) 55%, transparent); }
+.sw-fmark::before { content: ''; position: absolute; inset: -15px -15px; } /* the clickable area is 44 px tall; the drawn bar stays 16 px */
 .sw-fmark--uncertain { border-style: dashed; border-color: var(--sw-text-muted); background: color-mix(in srgb, var(--sw-text-muted) 35%, transparent); }
 .sw-fmark:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 1px; z-index: 1; }
 .sw-fmark.is-selected { background: var(--sw-accent); z-index: 1; }

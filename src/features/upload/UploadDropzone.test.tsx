@@ -186,7 +186,7 @@ describe('UploadDropzone with a server uploader', () => {
     for (const t of ['2:05', '1920×1080', '29.97 fps', 'H264', 'AAC']) expect(screen.getByText(t)).toBeInTheDocument();
     expect(screen.getAllByText('None').length).toBeGreaterThan(0); // subtitles: none
     expect(screen.getByText('Analysis: not started')).toBeInTheDocument();
-    expect(screen.getByText(/uploaded to the SafeWatch server and is deleted automatically/)).toBeInTheDocument();
+    expect(screen.getByText(/uploaded to your SafeWatch server and is deleted automatically/)).toBeInTheDocument();
     expect(screen.queryByText(/stays on your device/)).not.toBeInTheDocument();
   });
 

@@ -3,7 +3,7 @@
 .sw-nav__bar { display: flex; align-items: center; justify-content: space-between; gap: var(--sw-s-6); height: var(--sw-nav-h); }
 .sw-nav__links { display: flex; align-items: center; gap: var(--sw-s-2); margin-left: auto; margin-right: var(--sw-s-4); }
 .sw-nav__link {
-  display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--sw-s-3); border-radius: var(--sw-r-control);
+  display: inline-flex; align-items: center; min-height: var(--sw-touch); padding: 0 var(--sw-s-3); border-radius: var(--sw-r-control);
   font-size: 14px; font-weight: 500; color: var(--sw-text-2);
   transition: color var(--sw-t-fast) var(--sw-ease), background-color var(--sw-t-fast) var(--sw-ease);
 }
@@ -22,7 +22,7 @@
 }
 
 /* Wordmark */
-.sw-wordmark { display: inline-flex; align-items: center; gap: var(--sw-s-2); font-size: 18px; font-weight: 700; letter-spacing: -0.02em; border-radius: var(--sw-r-control); }
+.sw-wordmark { display: inline-flex; align-items: center; min-height: var(--sw-touch); gap: var(--sw-s-2); font-size: 18px; font-weight: 700; letter-spacing: -0.02em; border-radius: var(--sw-r-control); }
 .sw-wordmark__mark { color: var(--sw-accent); }
 .sw-wordmark__soft { color: var(--sw-text-2); font-weight: 500; }
 

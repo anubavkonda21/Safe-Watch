@@ -7,12 +7,12 @@ export function Hero() {
     <section className="sw-hero" aria-labelledby="hero-title">
       <Container className="sw-hero__grid">
         <div className="sw-hero__copy">
-          <p className="sw-label sw-hero__eyebrow">AI-powered media safety</p>
+          <p className="sw-label sw-hero__eyebrow">Media safety on your terms</p>
           <h1 id="hero-title" className="sw-display">
             Understand your media.<br />Control your experience.
           </h1>
           <p className="sw-body-lg sw-muted sw-hero__lede">
-            SafeWatch looks inside a video to understand what is happening, then lets you decide what you are willing to see and hear.
+            Choose the words and phrases you would rather not hear. SafeWatch finds them in a video’s speech and captions, warns you ahead of time, and can mute or skip them while you watch.
           </p>
           <div className="sw-hero__actions">
             <ButtonLink href="#analyze" size="lg">Analyze a Video</ButtonLink>

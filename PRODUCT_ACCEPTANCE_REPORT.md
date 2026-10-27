@@ -1,4 +1,6 @@
-# SafeWatch: Product Acceptance Audit (Phase 1, updated after Checkpoint 11)
+# SafeWatch: Product Acceptance Audit (Phase 1, updated after Checkpoints 11 and 12)
+
+> **Update, Checkpoint 12 (truthful UI and accessibility).** B1, B2, B3 and B4 below are fixed (section 9). Rows 15 and 16 improved; everything else is as stated in section 8 and earlier.
 
 > **Update, Checkpoint 11 (YouTube).** Requirement 2 changed from Missing to *Partially implemented*, and requirements 1, 3, 4, 6-9 gained a YouTube variant, all described in the rows below and in `CHECKPOINT_11_REPORT.md`. Everything else in this audit is as of `51221a3`. YouTube speech and scene analysis are **blocked by YouTube's API and policies**, not merely unbuilt.
 
@@ -90,3 +92,13 @@ That the original "slide away" meant a swipe gesture; that "skip 10 seconds" mea
 - **Late and missed findings** are now reported explicitly for caption files added during playback.
 - **Still open from section 3:** B1 (landing page says "Nothing is uploaded"), B2 (stale "planned" copy), B4 (controls under 44 px at 320 px; confirmed 28 px selects and 20 px checkboxes), the four load-sensitive older tests.
 - **Next-step questions answered or changed:** Q1 (YouTube scope) is answered for now as "playback + user captions"; owner-authorised captions and ads behaviour remain open (see §6 of the checkpoint report).
+
+## 9. Checkpoint 12 addendum (facts; evidence in `CHECKPOINT_12_REPORT.md`)
+
+- **B1 fixed**: the landing page no longer says "Nothing is uploaded" or that the engine is not built. The privacy section now describes both sources accurately, including that a YouTube link contacts YouTube. Pinned by 20 copy tests (`src/pages/HomePage.copy.test.tsx`).
+- **B2 fixed**: no "planned" labels on working features; no claim of scenes, masking, a safety timeline or "AI-powered" detection; the unsupported categories are named as not detected; the illustration is labelled as not a real result.
+- **B3 fixed**: the stale `UploadDropzone` comment and the screen-reader "Analysis has not started" status for uploaded media.
+- **B4 fixed except one documented exception**: all controls measured ≥44 px at 320/375/768/1280 px in three states; context-timeline segments are 24 px (each also a full-size list entry).
+- **#15 Privacy**: now **IV** for the page text as well as the panels (the contradiction is gone).
+- **#16 Responsive and accessibility**: **P / INV**, improved: 0 axe violations in a real browser at four widths and in jsdom, keyboard order and focus outlines observed, no overflow. **Not verified**: any screen reader, zoom/reflow at 200-400%, reduced motion and forced colours in a browser, physical touch devices, browsers other than Chromium. Accessibility compliance is not claimed.
+- **Still not implemented (unchanged)**: "+10 s" button (#8), swipe/slide dismissal (#7), a category other than "flagged phrase" in the warning (#5), censorship beyond mute and skip (#11), scene detection (#12), learning from reports (#14).

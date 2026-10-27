@@ -73,7 +73,7 @@ export function CustomFiltersSection() {
 
         <div className="sw-filters">
           <p className="sw-body-sm sw-muted sw-filters__how">
-            SafeWatch finds where your words and phrases occur in a video’s speech and subtitles, and can warn you before them, then mute or skip them if you choose. It matches the text you type. It does not learn new ideas from your list and does not understand what a sentence means.
+            SafeWatch finds where your words and phrases occur in a video’s speech and subtitles (or in a caption file you add for a YouTube video), and can warn you before them, then mute or skip them if you choose. It matches the text you type. It does not learn new ideas from your list and does not understand what a sentence means.
           </p>
           <form className="sw-filters__form" onSubmit={submit} noValidate>
             <Input
@@ -124,7 +124,7 @@ export function CustomFiltersSection() {
           )}
           {status && <p className="sw-caption sw-muted sw-filters__status" data-testid="filters-status">{status}</p>}
           <p className="sw-caption sw-muted sw-filters__note">
-            Your list is saved in this browser. When you analyze a video, the enabled phrases are sent to your SafeWatch server so it can find them in the transcript and subtitles; the server does not store or log them, and nothing is sent to anyone else.
+            Your list is saved in this browser. When you analyze a video file, the enabled phrases are sent to your SafeWatch server so it can find them in the transcript and subtitles; the server does not store or log them. For a YouTube video the matching happens in this browser and nothing goes to the server. Your phrases are never sent to YouTube or to anyone else.
           </p>
         </div>
       </Container>
